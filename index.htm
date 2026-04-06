@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WakeUp Move - Alarm</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #121212; color: white; }
+        .clock { font-size: 4rem; margin-bottom: 20px; }
+        .setup { background: #1e1e1e; padding: 2rem; border-radius: 12px; text-align: center; }
+        input, button { padding: 10px; margin: 5px; border-radius: 5px; border: none; }
+        button { background: #007bff; color: white; cursor: pointer; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="auth-container">
+        <h2>Login to WakeUp Move</h2>
+        <input type="email" id="email" placeholder="Email">
+        <input type="password" id="password" placeholder="Password">
+        <button id="login-btn">Login</button>
+    </div>
+
+    <div id="alarm-container" class="hidden">
+        <div class="clock" id="live-clock">00:00:00</div>
+        <div class="setup">
+            <h3>Set Wake-Up Alarm</h3>
+            <input type="time" id="alarm-time">
+            <button id="set-alarm-btn">Set Alarm</button>
+            <p id="status-msg"></p>
+        </div>
+        <button id="logout-btn" style="background: #444; margin-top: 20px;">Logout</button>
+    </div>
+
+    <script type="module">
+        // 1. Firebase Imports
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // 2. Configuration (Replace with your actual Firebase Config)
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT.appspot.com",
+            messagingSenderId: "YOUR_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // UI Elements
+        const authDiv = document.getElementById('auth-container');
+        const alarmDiv = document.getElementById('alarm-container');
+        let currentUser = null;
+        let alarmTime = null;
+
+        // 3. Auth Observer (Protecting the Dashboard)
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                authDiv.classList.add('hidden');
+                alarmDiv.classList.remove('hidden');
+                syncAlarmStatus();
+            } else {
+                currentUser = null;
+                authDiv.classList.remove('hidden');
+                alarmDiv.classList.add('hidden');
+            }
+        });
+
+        // Login Logic
+        document.getElementById('login-btn').onclick = () => {
+            const email = document.getElementById('email').value;
+            const pass = document.getElementById('password').value;
+            signInWithEmailAndPassword(auth, email, pass).catch(err => alert(err.message));
+        };
+
+        // Logout Logic
+        document.getElementById('logout-btn').onclick = () => signOut(auth);
+
+        // 4. Alarm Logic
+        setInterval(() => {
+            const now = new Date();
+            const timeStr = now.toTimeString().split(' ')[0];
+            document.getElementById('live-clock').innerText = timeStr;
+
+            if (alarmTime && timeStr.startsWith(alarmTime)) {
+                triggerAlarm();
+            }
+        }, 1000);
+
+        async function triggerAlarm() {
+            alarmTime = null; // Prevent double trigger
+            await setDoc(doc(db, "alarms", currentUser.uid), {
+                isTriggered: true,
+                repsCompleted: 0,
+                isActive: true
+            }, { merge: true });
+            
+            // Redirect to Streamlit (Replace with your actual Streamlit URL)
+            window.location.href = "https://your-app.streamlit.app";
+        }
+
+        document.getElementById('set-alarm-btn').onclick = () => {
+            alarmTime = document.getElementById('alarm-time').value;
+            document.getElementById('status-msg').innerText = `Alarm set for ${alarmTime}`;
+        };
+
+        // Listen for "Success" from Streamlit to reset UI
+        function syncAlarmStatus() {
+            onSnapshot(doc(db, "alarms", currentUser.uid), (doc) => {
+                if (doc.exists() && doc.data().isTriggered === false) {
+                    document.getElementById('status-msg').innerText = "Wake up successful! Room unlocked.";
+                }
+            });
+        }
+    </script>
+</body>
+</html>
+import streamlit as st
+import cv2
+import mediapipe as mp
+import numpy as np
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# 1. Initialize Firebase Admin (Using Streamlit Secrets)
+if not firebase_admin._apps:
+    # In Streamlit Cloud, add your JSON key content to .streamlit/secrets.toml
+    cred_dict = st.secrets["firebase_service_account"]
+    cred = credentials.Certificate(cred_dict)
+    firebase_admin.initialize_app(cred)
+
+db = firestore.client()
+
+st.title("Wake Up & Move")
+st.write("Complete 10 Squats to dismiss the alarm.")
+
+# 2. MediaPipe Setup
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+def calculate_angle(a, b, c):
+    a = np.array(a) # Hip
+    b = np.array(b) # Knee
+    c = np.array(c) # Ankle
+    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
+    angle = np.abs(radians*180.0/np.pi)
+    if angle > 180.0: angle = 360-angle
+    return angle
+
+# 3. Session State for Logic
+if 'counter' not in st.session_state: st.session_state.counter = 0
+if 'stage' not in st.session_state: st.session_state.stage = None
+user_id = st.query_params.get("uid", "default_user") # Pass UID in URL from GitHub
+
+ctx = cv2.VideoCapture(0) # Standard Streamlit camera input works better with WebRTC components, 
+                           # but for MVP, we'll use a simple loop.
+
+# Note: For high-performance browser-based camera in Streamlit, 
+# 'streamlit-webrtc' is recommended for Phase 3.
+
+# 4. Simple Count Display
+placeholder = st.empty()
+progress_bar = st.progress(0)
+
+if st.session_state.counter >= 10:
+    st.success(" Goal Reached!")
+    if st.button("Dismiss Alarm"):
+        # Update Firebase to turn off the alarm
+        db.collection("alarms").document(user_id).update({
+            "isTriggered": False,
+            "repsCompleted": 10
+        })
+        st.write("Alarm Reset. You can now close this tab.")
