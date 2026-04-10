@@ -1,0 +1,164 @@
+import streamlit as st
+import cv2
+import mediapipe as mp
+import numpy as np
+import time
+
+# --- PAGE ---
+st.set_page_config(layout="wide")
+
+# --- STYLE (ULTRA MINIMAL) ---
+st.markdown("""
+<style>
+html, body, [class*="css"] {
+    background-color: #0b0f14;
+    color: white;
+    overflow: hidden;
+}
+
+/* Remove all default padding */
+.block-container {
+    padding: 0;
+}
+
+/* Floating HUD */
+.hud {
+    position: fixed;
+    top: 20px;
+    right: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    z-index: 999;
+}
+
+.card {
+    background: rgba(255,255,255,0.05);
+    backdrop-filter: blur(12px);
+    border-radius: 14px;
+    padding: 14px 20px;
+    text-align: center;
+    border: 1px solid rgba(255,255,255,0.08);
+    min-width: 90px;
+}
+
+.big {
+    font-size: 28px;
+    font-weight: 600;
+}
+
+.small {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+.up { color: #00ff88; }
+.down { color: #ff3b3b; }
+
+/* Hide footer/menu */
+footer, #MainMenu {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# --- UI PLACEHOLDERS ---
+frame_placeholder = st.empty()
+hud_placeholder = st.empty()
+
+# --- MEDIAPIPE ---
+mp_pose = mp.solutions.pose
+mp_drawing = mp.solutions.drawing_utils
+
+# --- STATE ---
+if "reps" not in st.session_state:
+    st.session_state.reps = 0
+if "stage" not in st.session_state:
+    st.session_state.stage = "up"
+
+# --- ANGLE ---
+def angle(a, b, c):
+    a, b, c = np.array(a), np.array(b), np.array(c)
+    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
+    ang = np.abs(radians * 180.0 / np.pi)
+    return 360-ang if ang > 180 else ang
+
+# --- CAMERA ---
+cap = cv2.VideoCapture(0)
+
+with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as pose:
+    while cap.isOpened() and st.session_state.reps < 10:
+
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame = cv2.flip(frame, 1)
+        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img.flags.writeable = False
+
+        results = pose.process(img)
+
+        img.flags.writeable = True
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+        ang = 0
+
+        try:
+            lm = results.pose_landmarks.landmark
+
+            hip = [lm[mp_pose.PoseLandmark.RIGHT_HIP.value].x,
+                   lm[mp_pose.PoseLandmark.RIGHT_HIP.value].y]
+            knee = [lm[mp_pose.PoseLandmark.RIGHT_KNEE.value].x,
+                    lm[mp_pose.PoseLandmark.RIGHT_KNEE.value].y]
+            ankle = [lm[mp_pose.PoseLandmark.RIGHT_ANKLE.value].x,
+                     lm[mp_pose.PoseLandmark.RIGHT_ANKLE.value].y]
+
+            ang = angle(hip, knee, ankle)
+
+            if ang > 165:
+                st.session_state.stage = "up"
+
+            if ang < 95 and st.session_state.stage == "up":
+                st.session_state.stage = "down"
+                st.session_state.reps += 1
+
+        except:
+            pass
+
+        # --- DRAW SKELETON ---
+        mp_drawing.draw_landmarks(
+            img,
+            results.pose_landmarks,
+            mp_pose.POSE_CONNECTIONS,
+            mp_drawing.DrawingSpec(color=(0,255,136), thickness=2, circle_radius=2),
+            mp_drawing.DrawingSpec(color=(255,255,255), thickness=1)
+        )
+
+        frame_placeholder.image(img, channels="BGR", use_container_width=True)
+
+        # --- FLOATING HUD ---
+        color = "up" if st.session_state.stage == "up" else "down"
+
+        hud_placeholder.markdown(f"""
+        <div class="hud">
+            <div class="card">
+                <div class="small">REPS</div>
+                <div class="big">{st.session_state.reps}</div>
+            </div>
+            <div class="card">
+                <div class="small">STATE</div>
+                <div class="big {color}">{st.session_state.stage}</div>
+            </div>
+            <div class="card">
+                <div class="small">ANGLE</div>
+                <div class="big">{int(ang)}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        time.sleep(0.03)
+
+cap.release()
+
+# --- END ---
+if st.session_state.reps >= 10:
+    st.balloons()
