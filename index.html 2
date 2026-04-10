@@ -142,7 +142,7 @@ st.markdown("""
     </style>
     """, unsafe_content_allowed=True)
 
-st.title("⚡ Mission: 10 Squats")
+st.title("Mission: 10 Squats")
 
 # Creating a clean layout
 col1, col2 = st.columns([3, 1])
