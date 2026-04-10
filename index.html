@@ -2,124 +2,175 @@ import streamlit as st
 import cv2
 import mediapipe as mp
 import numpy as np
-from firebase_admin import firestore
+import time
 
-# --- STYLING ---
-st.set_page_config(page_title="FitRise AI", layout="centered")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="FitRise AI", layout="wide")
+
+# --- CUSTOM STYLING ---
 st.markdown("""
-    <style>
-    .reportview-container { background: #0e1117; }
-    .metric-box {
-        background: rgba(255,255,255,0.05);
-        padding: 20px;
-        border-radius: 15px;
-        text-align: center;
-        border: 1px solid #00ff88;
-    }
-    </style>
-""", unsafe_content_allowed=True)
+<style>
+html, body, [class*="css"]  {
+    background-color: #0e1117;
+    color: #ffffff;
+    font-family: 'Inter', sans-serif;
+}
 
-# --- MEDIAPIPE INITIALIZATION ---
-mp_drawing = mp.solutions.drawing_utils
-mp_pose = mp.solutions.pose
+.title {
+    font-size: 42px;
+    font-weight: 700;
+    text-align: center;
+    background: linear-gradient(90deg, #00ff88, #00cfff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
 
-def calculate_angle(a, b, c):
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
-    
-    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
-    angle = np.abs(radians*180.0/np.pi)
-    
-    if angle > 180.0:
-        angle = 360-angle
-    return angle
+.metric-card {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(0,255,136,0.3);
+    border-radius: 20px;
+    padding: 20px;
+    text-align: center;
+    backdrop-filter: blur(10px);
+}
 
-# --- APP INTERFACE ---
-st.title("Squat Protocol Active")
-col1, col2 = st.columns([2, 1])
+.status-up { color: #00ff88; font-weight: bold; }
+.status-down { color: #ff4d4d; font-weight: bold; }
+
+footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# --- TITLE ---
+st.markdown("<div class='title'>🏋️ FitRise AI – Smart Squat Trainer</div>", unsafe_allow_html=True)
+st.write("")
+
+# --- LAYOUT ---
+col1, col2 = st.columns([3, 1])
 
 with col2:
-    st.markdown("<div class='metric-box'>", unsafe_content_allowed=True)
-    rep_display = st.empty()
-    stage_display = st.empty()
-    st.markdown("</div>", unsafe_content_allowed=True)
+    rep_box = st.empty()
+    stage_box = st.empty()
+    angle_box = st.empty()
     progress_bar = st.progress(0)
 
 with col1:
     frame_placeholder = st.empty()
 
-# --- INITIALIZE STATE ---
-if 'reps' not in st.session_state: st.session_state.reps = 0
-if 'stage' not in st.session_state: st.session_state.stage = "up"
+# --- MEDIAPIPE SETUP ---
+mp_pose = mp.solutions.pose
+mp_drawing = mp.solutions.drawing_utils
 
-# --- CAMERA LOOP ---
+# --- STATE INIT ---
+if "reps" not in st.session_state:
+    st.session_state.reps = 0
+if "stage" not in st.session_state:
+    st.session_state.stage = "up"
+
+# --- ANGLE FUNCTION ---
+def calculate_angle(a, b, c):
+    a, b, c = np.array(a), np.array(b), np.array(c)
+    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
+    angle = np.abs(radians * 180.0 / np.pi)
+    return 360 - angle if angle > 180 else angle
+
+# --- CAMERA ---
 cap = cv2.VideoCapture(0)
 
-# Higher confidence prevents "flickering" reps
+# --- MAIN LOOP ---
 with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as pose:
+
     while cap.isOpened() and st.session_state.reps < 10:
         ret, frame = cap.read()
         if not ret:
-            st.error("Camera not found.")
+            st.error("❌ Camera not detected")
             break
 
-        # 1. Prepare Image
-        # Flip for mirror effect, convert to RGB for MediaPipe
-        image = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
+        # --- PREPROCESS ---
+        frame = cv2.flip(frame, 1)
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image.flags.writeable = False
-        
-        # 2. Detect Pose
+
         results = pose.process(image)
-        
-        # 3. Draw & Logic
+
         image.flags.writeable = True
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        
+
+        angle = 0
+
         try:
             landmarks = results.pose_landmarks.landmark
-            
-            # Get coordinates for Hip, Knee, Ankle (Right Side)
-            hip = [landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].x, landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].y]
-            knee = [landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].x, landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].y]
-            ankle = [landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value].x, landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value].y]
-            
-            angle = calculate_angle(hip, knee, ankle)
-            
-            # VISUAL FEEDBACK: Draw the angle on the knee
-            # Convert normalized to pixel for text placement
-            h, w, _ = image.shape
-            knee_pos = tuple(np.multiply(knee, [w, h]).astype(int))
-            cv2.putText(image, str(int(angle)), knee_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 136), 2, cv2.LINE_AA)
 
-            # SQUAT COUNTER LOGIC
-            # Standing = ~170 degrees | Squatting = < 100 degrees
-            if angle > 160:
+            hip = [landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].x,
+                   landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].y]
+            knee = [landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].x,
+                    landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].y]
+            ankle = [landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value].x,
+                     landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value].y]
+
+            angle = calculate_angle(hip, knee, ankle)
+
+            # --- REP LOGIC ---
+            if angle > 165:
                 st.session_state.stage = "up"
-            if angle < 100 and st.session_state.stage == "up":
+
+            if angle < 95 and st.session_state.stage == "up":
                 st.session_state.stage = "down"
                 st.session_state.reps += 1
-                # Optional: Add a sound trigger here if you want it to beep
-                
-        except Exception as e:
-            pass # Pose not fully in frame
 
-        # 4. Render Layout
-        mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS,
-                                 mp_drawing.DrawingSpec(color=(0, 255, 136), thickness=2, circle_radius=2),
-                                 mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2, circle_radius=2))
-        
-        frame_placeholder.image(image, channels="BGR", use_column_width=True)
-        
-        # Update text displays
-        rep_display.markdown(f"## REPS: {st.session_state.reps}")
-        stage_display.markdown(f"**STATUS:** {st.session_state.stage.upper()}")
+            # --- DRAW ANGLE ---
+            h, w, _ = image.shape
+            knee_pos = tuple(np.multiply(knee, [w, h]).astype(int))
+
+            cv2.putText(image, f"{int(angle)}°", knee_pos,
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (0, 255, 136), 2, cv2.LINE_AA)
+
+        except:
+            pass
+
+        # --- DRAW LANDMARKS ---
+        mp_drawing.draw_landmarks(
+            image,
+            results.pose_landmarks,
+            mp_pose.POSE_CONNECTIONS,
+            mp_drawing.DrawingSpec(color=(0,255,136), thickness=2, circle_radius=2),
+            mp_drawing.DrawingSpec(color=(255,255,255), thickness=2)
+        )
+
+        # --- UI UPDATE ---
+        frame_placeholder.image(image, channels="BGR", use_container_width=True)
+
+        rep_box.markdown(f"""
+        <div class="metric-card">
+            <h2>Reps</h2>
+            <h1>{st.session_state.reps}</h1>
+        </div>
+        """, unsafe_allow_html=True)
+
+        stage_class = "status-up" if st.session_state.stage == "up" else "status-down"
+
+        stage_box.markdown(f"""
+        <div class="metric-card">
+            <h3>Status</h3>
+            <p class="{stage_class}">{st.session_state.stage.upper()}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        angle_box.markdown(f"""
+        <div class="metric-card">
+            <h3>Knee Angle</h3>
+            <h2>{int(angle)}°</h2>
+        </div>
+        """, unsafe_allow_html=True)
+
         progress_bar.progress(st.session_state.reps / 10)
+
+        time.sleep(0.03)
 
 cap.release()
 
-# --- SUCCESS STATE ---
+# --- SUCCESS ---
 if st.session_state.reps >= 10:
     st.balloons()
-    st.success("Target Reached. Alarm Deactivated.")
-    # Your Firebase update logic here
+    st.success("🎯 Goal Reached! Workout Complete.")
