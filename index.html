@@ -1,183 +1,125 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FitRise | Stay Active</title>
-    <script src="https://www.gstatic.com/firebasejs/9.1.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.1.0/firebase-firestore-compat.js"></script>
-    <style>
-        :root {
-            --primary: #00ff88;
-            --bg: #0a0a0a;
-            --card-bg: rgba(255, 255, 255, 0.05);
-        }
-        
-        body { 
-            font-family: 'Inter', -apple-system, sans-serif; 
-            background: radial-gradient(circle at top right, #1a1a1a, #0a0a0a);
-            color: white;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            overflow: hidden;
-        }
-
-        .glass-card {
-            background: var(--card-bg);
-            backdrop-filter: blur(10px);
-            padding: 3rem;
-            border-radius: 30px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            text-align: center;
-            width: 400px;
-        }
-
-        h1 { 
-            font-weight: 800; 
-            letter-spacing: -1px; 
-            margin-bottom: 0.5rem;
-            background: linear-gradient(to right, #00ff88, #60efff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        #clock { 
-            font-size: 72px; 
-            font-weight: 200; 
-            margin: 1.5rem 0;
-            font-variant-numeric: tabular-nums;
-            color: #fff;
-            text-shadow: 0 0 30px rgba(0, 255, 136, 0.2);
-        }
-
-        .input-group {
-            background: rgba(0, 0, 0, 0.3);
-            padding: 10px;
-            border-radius: 15px;
-            margin-bottom: 2rem;
-            border: 1px solid #333;
-        }
-
-        input[type="time"] {
-            background: transparent;
-            border: none;
-            color: var(--primary);
-            font-size: 24px;
-            font-family: inherit;
-            outline: none;
-        }
-
-        .btn { 
-            width: 100%;
-            padding: 18px; 
-            font-size: 16px; 
-            font-weight: 700; 
-            cursor: pointer; 
-            background: var(--primary); 
-            color: #000; 
-            border: none; 
-            border-radius: 15px; 
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            transition: all 0.3s ease;
-            box-shadow: 0 10px 20px -5px rgba(0, 255, 136, 0.4);
-        }
-
-        .btn:hover { 
-            transform: translateY(-2px);
-            box-shadow: 0 15px 25px -5px rgba(0, 255, 136, 0.6);
-        }
-    </style>
-</head>
-<body>
-    <div class="glass-card">
-        <h1>FITRISE</h1>
-        <p style="opacity: 0.6; margin-bottom: 2rem;">WAKE UP. WORK OUT.</p>
-        
-        <div id="clock">00:00:00</div>
-
-        <div class="input-group">
-            <input type="time" id="alarmTime">
-        </div>
-
-        <button class="btn" onclick="setAlarm()">Set Protocol</button>
-    </div>
-
-    <script>
-        // Use your previous script logic here...
-        // Ensure you update the clock display in the setInterval
-    </script>
-</body>
-</html>
 import streamlit as st
-# ... (previous imports)
+import cv2
+import mediapipe as mp
+import numpy as np
+from firebase_admin import firestore
 
-st.set_page_config(page_title="FitRise Room", layout="centered")
-
-# --- CUSTOM CSS FOR AESTHETICS ---
+# --- STYLING ---
+st.set_page_config(page_title="FitRise AI", layout="centered")
 st.markdown("""
     <style>
-    .main { background-color: #0e1117; }
-    .stProgress > div > div > div > div {
-        background-image: linear-gradient(to right, #00ff88 , #60efff);
-    }
-    div[data-testid="stTitle"] {
-        font-family: 'Inter', sans-serif;
-        color: #00ff88;
+    .reportview-container { background: #0e1117; }
+    .metric-box {
+        background: rgba(255,255,255,0.05);
+        padding: 20px;
+        border-radius: 15px;
         text-align: center;
-        font-weight: 800;
-        text-transform: uppercase;
-    }
-    .rep-counter {
-        font-size: 80px;
-        font-weight: 800;
-        text-align: center;
-        color: white;
-        margin-top: -20px;
+        border: 1px solid #00ff88;
     }
     </style>
-    """, unsafe_content_allowed=True)
+""", unsafe_content_allowed=True)
 
-st.title("Mission: 10 Squats")
+# --- MEDIAPIPE INITIALIZATION ---
+mp_drawing = mp.solutions.drawing_utils
+mp_pose = mp.solutions.pose
 
-# Creating a clean layout
-col1, col2 = st.columns([3, 1])
+def calculate_angle(a, b, c):
+    a = np.array(a)
+    b = np.array(b)
+    c = np.array(c)
+    
+    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
+    angle = np.abs(radians*180.0/np.pi)
+    
+    if angle > 180.0:
+        angle = 360-angle
+    return angle
+
+# --- APP INTERFACE ---
+st.title("🔋 Squat Protocol Active")
+col1, col2 = st.columns([2, 1])
 
 with col2:
-    st.markdown("### Progress")
-    rep_text = st.empty()
-    st.markdown("---")
-    st.caption("Lower your hips below knee level. Stand up fully.")
+    st.markdown("<div class='metric-box'>", unsafe_content_allowed=True)
+    rep_display = st.empty()
+    stage_display = st.empty()
+    st.markdown("</div>", unsafe_content_allowed=True)
+    progress_bar = st.progress(0)
 
 with col1:
     frame_placeholder = st.empty()
-    progress_bar = st.progress(0)
 
-# --- IN THE LOOP ---
-# Replace your previous display logic with this:
-while st.session_state.reps < 10:
-    # ... (capture logic)
-    
-    # Prettier Frame Drawing
-    # (Optional: Use a specific color for the skeleton to match the theme)
-    # mp_drawing.DrawingSpec(color=(136, 255, 0), thickness=2, circle_radius=2)
-    
-    frame_placeholder.image(image, channels="RGB", use_column_width=True)
-    progress_bar.progress(st.session_state.reps * 10)
-    rep_text.markdown(f"<div class='rep-counter'>{st.session_state.reps}</div>", unsafe_content_allowed=True)
+# --- INITIALIZE STATE ---
+if 'reps' not in st.session_state: st.session_state.reps = 0
+if 'stage' not in st.session_state: st.session_state.stage = "up"
 
+# --- CAMERA LOOP ---
+cap = cv2.VideoCapture(0)
+
+# Higher confidence prevents "flickering" reps
+with mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7) as pose:
+    while cap.isOpened() and st.session_state.reps < 10:
+        ret, frame = cap.read()
+        if not ret:
+            st.error("Camera not found.")
+            break
+
+        # 1. Prepare Image
+        # Flip for mirror effect, convert to RGB for MediaPipe
+        image = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False
+        
+        # 2. Detect Pose
+        results = pose.process(image)
+        
+        # 3. Draw & Logic
+        image.flags.writeable = True
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        
+        try:
+            landmarks = results.pose_landmarks.landmark
+            
+            # Get coordinates for Hip, Knee, Ankle (Right Side)
+            hip = [landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].x, landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].y]
+            knee = [landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].x, landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].y]
+            ankle = [landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value].x, landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value].y]
+            
+            angle = calculate_angle(hip, knee, ankle)
+            
+            # VISUAL FEEDBACK: Draw the angle on the knee
+            # Convert normalized to pixel for text placement
+            h, w, _ = image.shape
+            knee_pos = tuple(np.multiply(knee, [w, h]).astype(int))
+            cv2.putText(image, str(int(angle)), knee_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 136), 2, cv2.LINE_AA)
+
+            # SQUAT COUNTER LOGIC
+            # Standing = ~170 degrees | Squatting = < 100 degrees
+            if angle > 160:
+                st.session_state.stage = "up"
+            if angle < 100 and st.session_state.stage == "up":
+                st.session_state.stage = "down"
+                st.session_state.reps += 1
+                # Optional: Add a sound trigger here if you want it to beep
+                
+        except Exception as e:
+            pass # Pose not fully in frame
+
+        # 4. Render Layout
+        mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS,
+                                 mp_drawing.DrawingSpec(color=(0, 255, 136), thickness=2, circle_radius=2),
+                                 mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2, circle_radius=2))
+        
+        frame_placeholder.image(image, channels="BGR", use_column_width=True)
+        
+        # Update text displays
+        rep_display.markdown(f"## REPS: {st.session_state.reps}")
+        stage_display.markdown(f"**STATUS:** {st.session_state.stage.upper()}")
+        progress_bar.progress(st.session_state.reps / 10)
+
+cap.release()
+
+# --- SUCCESS STATE ---
 if st.session_state.reps >= 10:
     st.balloons()
-    st.markdown("<h2 style='text-align: center; color: #00ff88;'>MISSION ACCOMPLISHED</h2>", unsafe_content_allowed=True)
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /alarms/{document=**} {
-      // For MVP, allow read/write. In production, restrict to authenticated users.
-      allow read, write: if true; 
-    }
-  }
-}
+    st.success("Target Reached. Alarm Deactivated.")
+    # Your Firebase update logic here
