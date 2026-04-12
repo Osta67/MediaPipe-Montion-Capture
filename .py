@@ -68,3 +68,8 @@ if st.session_state.count >= 10:
     db.collection("alarms").document("status").update({"isTriggered": False})
     st.success("Alarm Deactivated! Great start to your day.")
     st.balloons()
+streamlit
+mediapipe
+opencv-python-headless
+numpy
+firebase-admin
