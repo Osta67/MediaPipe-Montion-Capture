@@ -5,13 +5,16 @@ import numpy as np
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# 1. Firebase Connection (Uses Streamlit Secrets for security)
+# 1. Firebase Initialization
 if not firebase_admin._apps:
-    cred = credentials.Certificate(dict(st.secrets["firebase"]))
+    # On Streamlit Cloud, you will put your JSON keys in the "Secrets" setting
+    cred_dict = dict(st.secrets["firebase"])
+    cred = credentials.Certificate(cred_dict)
     firebase_admin.initialize_app(cred)
+
 db = firestore.client()
 
-# 2. MediaPipe Pose Setup
+# 2. MediaPipe Pose Config
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7)
 
@@ -21,41 +24,47 @@ def calculate_angle(a, b, c):
     angle = np.abs(radians*180.0/np.pi)
     return 360-angle if angle > 180.0 else angle
 
-st.title("FitRise: Squat to Wake Up!")
-st.write("Complete 10 squats to deactivate the alarm.")
+st.set_page_config(page_title="FitRise Exercise Room", layout="wide")
+st.title("🏃 Finish 10 Squats to Stop the Alarm!")
 
-# 3. Squat Counter Logic
+# 3. Session State for Rep Counting
 if 'count' not in st.session_state: st.session_state.count = 0
 if 'stage' not in st.session_state: st.session_state.stage = "up"
 
+# Using a webcam placeholder
 img_placeholder = st.empty()
 cap = cv2.VideoCapture(0)
 
 while st.session_state.count < 10:
     success, image = cap.read()
-    if not success: break
+    if not success:
+        st.warning("Please enable your camera.")
+        break
 
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     results = pose.process(image)
 
     if results.pose_landmarks:
         lmk = results.pose_landmarks.landmark
-        # Hip, Knee, Ankle landmarks
-        h = [lmk[24].x, lmk[24].y]; k = [lmk[26].x, lmk[26].y]; a = [lmk[28].x, lmk[28].y]
-        angle = calculate_angle(h, k, a)
+        # Landmarks: Hip (24), Knee (26), Ankle (28)
+        hip = [lmk[24].x, lmk[24].y]
+        knee = [lmk[26].x, lmk[26].y]
+        ankle = [lmk[28].x, lmk[28].y]
+        
+        angle = calculate_angle(hip, knee, ankle)
 
-        # Count reps: Down (<90 deg) then Up (>160 deg)
-        if angle < 90: st.session_state.stage = "down"
+        # Rep Logic
+        if angle < 90:
+            st.session_state.stage = "down"
         if angle > 160 and st.session_state.stage == "down":
             st.session_state.stage = "up"
             st.session_state.count += 1
 
     img_placeholder.image(image, channels="RGB")
-    st.info(f"Squats Completed: {st.session_state.count}/10")
+    st.header(f"Progress: {st.session_state.count} / 10 Reps")
 
-# 4. Final Action: Tell Firebase the alarm is OFF
+# 4. Success Completion
 if st.session_state.count >= 10:
     db.collection("alarms").document("status").update({"isTriggered": False})
-    st.success("Great job! Alarm dismissed.")
+    st.success("Alarm Deactivated! Great start to your day.")
     st.balloons()
-  
