@@ -56,3 +56,4 @@ else:
 mediapipe
 opencv-python-headless
 numpy
+firebase-admin
