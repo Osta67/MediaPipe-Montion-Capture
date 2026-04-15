@@ -53,6 +53,19 @@ else:
     st.title("FitRise Standby")
     st.write("Waiting for alarm trigger from the main app...")
     streamlit
+
+# Force a fresh check of the database
+def check_alarm_status():
+    doc_ref = db.collection("alarms").document("current")
+    doc = doc_ref.get()
+    if doc.exists:
+        return doc.to_dict().get("isTriggered", False)
+    return False
+
+# Use the function
+if check_alarm_status():
+    st.title(" SQUAT TIME!")
+    # ... rest of your MediaPipe logic ...
 mediapipe
 opencv-python-headless
 numpy
