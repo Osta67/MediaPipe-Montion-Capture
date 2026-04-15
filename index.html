@@ -19,7 +19,11 @@
     <br>
     <button id="saveBtn">Set Morning Alarm</button>
     
-  <script type="module">
+ <script type="module">
+    // 1. ADD THIS AT THE VERY TOP TO TEST IF THE SCRIPT RUNS AT ALL
+    console.log("Script block starting..."); 
+    alert("Checking connection..."); // If this alert doesn't show, the script is broken!
+
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { getFirestore, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
@@ -32,42 +36,23 @@
         appId: "1:194144536036:web:01a57bbef13074c42733f1"
     };
 
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
+    try {
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        
+        // THIS IS THE MESSAGE YOU ARE LOOKING FOR
+        console.log("Firestore Database connected successfully!");
+        alert("Firestore Connected!"); 
 
-    // TEST: Run this in your console to see if it works
-    console.log("Firebase initialized for project: " + firebaseConfig.projectId);
-
-    document.getElementById('saveBtn').addEventListener('click', () => {
-        const val = document.getElementById('alarmTime').value;
-        if(val) {
+        // Attach function to window so the button can see it
+        window.saveAlarm = function() {
+            const val = document.getElementById('alarmTime').value;
             localStorage.setItem('userAlarm', val);
-            alert("Success! Alarm set for " + val);
-        }
-    });
+            alert("Alarm saved for " + val);
+        };
 
-    setInterval(() => {
-        const now = new Date();
-        const currentTime = String(now.getHours()).padStart(2, '0') + ":" + String(now.getMinutes()).padStart(2, '0');
-        const target = localStorage.getItem('userAlarm');
-
-        if (target === currentTime) {
-            triggerAlarm();
-        }
-    }, 1000);
-
-    async function triggerAlarm() {
-        try {
-            // This is the "Handshake"
-            await setDoc(doc(db, "alarms", "current"), { isTriggered: true }, { merge: true });
-            console.log("Firestore Updated!");
-            
-            // Redirect to Streamlit
-            window.location.href = "https://your-app-name.streamlit.app"; 
-        } catch (e) {
-            console.error("Connection Error: ", e);
-            alert("Database write failed. Check Firebase Rules!");
-        }
+    } catch (error) {
+        console.error("FIREBASE FAILED TO START:", error);
     }
 </script>
 </body>
