@@ -43,96 +43,61 @@
 </body>
 </html>
     
-<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
-
-<script>
-    // 2. This will run immediately to prove the script is alive
-    console.log("--- STARTING FIREBASE CHECK ---");
-
-    const firebaseConfig = {
+<script type="module">
+  const firebaseConfig = {
         apiKey: "AIzaSyBLNz5NxJkxoeTPtxg_m5P547ID4bkiW7Q",
         authDomain: "mediapipe-motioncapture-new.firebaseapp.com",
         projectId: "mediapipe-motioncapture-new",
         storageBucket: "mediapipe-motioncapture-new.firebasestorage.app",
         messagingSenderId: "194144536036",
         appId: "1:194144536036:web:01a57bbef13074c42733f1"
-    };
 
-    // 3. Initialize Firebase
-    try {
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
-        
-        // THIS IS THE MESSAGE YOU NEED
-        console.log("Firestore Database connected successfully!");
-        alert("Firestore is ACTIVE!");
-    } catch (e) {
-        console.error("Firebase failed to load:", e);
-    }
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
 
-    // 4. Alarm Logic
-    function saveAlarm() {
-        const val = document.getElementById('alarmTime').value;
-        if (val) {
-            localStorage.setItem('userAlarm', val);
-            alert("Alarm saved for " + val);
-        }
-    }
-
-    async function triggerAlarm() {
-        console.log("Triggering Alarm...");
-        try {
-            const db = firebase.firestore();
-            await db.collection("alarms").doc("current").set({
-                isTriggered: true,
-                timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            }, { merge: true });
-            
-            console.log("Database updated! Redirecting...");
-            window.location.href = "https://your-app-name.streamlit.app?alarm=active";
-        } catch (error) {
-            console.error("Error writing to database:", error);
-        }
-    }
-
+    // 1. Clock Update
     setInterval(() => {
         const now = new Date();
-        const timeString = String(now.getHours()).padStart(2, '0') + ":" + String(now.getMinutes()).padStart(2, '0');
-        const target = localStorage.getItem('userAlarm');
+        const currentTime = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        document.getElementById('clock').innerText = now.toLocaleTimeString('en-GB');
 
-        if (target === timeString) {
+        // 2. Check the Alarm
+        const savedAlarm = localStorage.getItem('userAlarm');
+        
+        // We log this so you can see the comparison in the Inspect -> Console
+        console.log(`Checking: Current(${currentTime}) vs Saved(${savedAlarm})`);
+
+        if (savedAlarm === currentTime) {
             triggerAlarm();
         }
     }, 1000);
-    import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-const db = getFirestore();
-
-async function saveStudySession() {
-    // 1. Grab the values from your HTML inputs
-    const subjectName = document.getElementById('subjectInput').value;
-    const studyDuration = document.getElementById('durationInput').value;
-
-    try {
-        // 2. Use addDoc to create a new entry in the "studySchedules" collection
-        const docRef = await addDoc(collection(db, "studySchedules"), {
-            subject: subjectName,
-            duration: studyDuration,
-            createdAt: serverTimestamp() // Adds a precise time-stamp from Google's servers
-        });
-
-        console.log("Document written with ID: ", docRef.id);
-        alert("Schedule saved successfully!");
+    async function triggerAlarm() {
+        console.log("ALARM TRIGGERED!");
         
-    } catch (e) {
-        console.error("Error adding document: ", e);
-        alert("Error saving data. Check your Firestore rules!");
-    }
-}
+        try {
+            // A. Update Firebase so Streamlit knows to start the camera
+            await setDoc(doc(db, "alarms", "current"), { 
+                isTriggered: true,
+                timestamp: new Date() 
+            }, { merge: true });
 
-// 3. Attach it to your button
-document.getElementById('saveButton').addEventListener('click', saveStudySession);
+            // B. Perform the Redirect
+            // IMPORTANT: Ensure this URL starts with https://
+            const streamlitURL = "https://your-app-name.streamlit.app"; 
+            window.location.href = streamlitURL;
+
+        } catch (error) {
+            console.error("Redirect failed:", error);
+        }
+    }
+
+    // Button Listener
+    document.getElementById('saveBtn').addEventListener('click', () => {
+        const time = document.getElementById('alarmTime').value;
+        localStorage.setItem('userAlarm', time);
+        alert("Alarm set for " + time);
+    });
 </script>
 </body>
 </html>
