@@ -17,15 +17,16 @@
     <div id="clock">00:00:00</div>
     <input type="time" id="alarmTime">
     <br>
-    <button id="saveBtn">Set Morning Alarm</button>
+   <button onclick="window.saveAlarm()">Set Morning Alarm</button>
     
  <script type="module">
-    // 1. ADD THIS AT THE VERY TOP TO TEST IF THE SCRIPT RUNS AT ALL
-    console.log("Script block starting..."); 
-    alert("Checking connection..."); // If this alert doesn't show, the script is broken!
+    console.log("1. Script is running...");
 
+    // Import Firebase
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { getFirestore, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    console.log("2. Firebase libraries imported...");
 
     const firebaseConfig = {
         apiKey: "AIzaSyBLNz5NxJkxoeTPtxg_m5P547ID4bkiW7Q",
@@ -40,20 +41,49 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         
-        // THIS IS THE MESSAGE YOU ARE LOOKING FOR
-        console.log("Firestore Database connected successfully!");
-        alert("Firestore Connected!"); 
-
-        // Attach function to window so the button can see it
+        // --- THIS IS THE MESSAGE YOU NEED ---
+        console.log("3. Firestore Database connected successfully!");
+        
+        // Attach functions to window so the buttons can see them
         window.saveAlarm = function() {
             const val = document.getElementById('alarmTime').value;
-            localStorage.setItem('userAlarm', val);
-            alert("Alarm saved for " + val);
+            if (val) {
+                localStorage.setItem('userAlarm', val);
+                alert("Alarm saved for " + val);
+            } else {
+                alert("Please select a time first!");
+            }
+        };
+
+        window.triggerAlarm = async function() {
+            console.log("Attempting to write to Firestore...");
+            try {
+                await setDoc(doc(db, "alarms", "current"), { 
+                    isTriggered: true,
+                    timestamp: new Date()
+                }, { merge: true });
+                console.log("Firestore Updated!");
+                window.location.href = "https://your-app-name.streamlit.app?alarm=active";
+            } catch (e) {
+                console.error("Firestore Write Error:", e);
+                alert("Database error! Check your Firebase Rules.");
+            }
         };
 
     } catch (error) {
-        console.error("FIREBASE FAILED TO START:", error);
+        console.error("Firebase Initialization Error:", error);
     }
+
+    // Alarm Checker Logic
+    setInterval(() => {
+        const now = new Date();
+        const timeString = String(now.getHours()).padStart(2, '0') + ":" + String(now.getMinutes()).padStart(2, '0');
+        const target = localStorage.getItem('userAlarm');
+
+        if (target === timeString) {
+            window.triggerAlarm();
+        }
+    }, 1000);
 </script>
 </body>
 </html>
