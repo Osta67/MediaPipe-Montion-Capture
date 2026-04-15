@@ -17,7 +17,7 @@ st.set_page_config(page_title="FitRise Exercise Room")
 
 # Check if the alarm was triggered via the URL
 if st.query_params.get("alarm") == "active":
-    st.title("🏃 ALARM ACTIVE: 10 Squats to Stop!")
+    st.title(" ALARM ACTIVE: 10 Squats to Stop!")
     
     if 'count' not in st.session_state: st.session_state.count = 0
     if 'stage' not in st.session_state: st.session_state.stage = "up"
