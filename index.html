@@ -19,31 +19,57 @@
     <br>
     <button id="saveBtn">Set Morning Alarm</button>
     
-    <script>
-        // Update the Clock display
-        setInterval(() => {
-            const now = new Date();
-            const timeString = now.toLocaleTimeString('en-GB', { hour12: false }).substring(0, 5);
-            document.getElementById('clock').innerText = now.toLocaleTimeString();
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-            const targetTime = localStorage.getItem('userAlarm');
-            if (targetTime === timeString) {
-                triggerAlarm();
-            }
-        }, 1000);
+    const firebaseConfig = {
+        apiKey: "AIzaSyBLNz5NxJkxoeTPtxg_m5P547ID4bkiW7Q",
+        authDomain: "mediapipe-motioncapture-new.firebaseapp.com",
+        projectId: "mediapipe-motioncapture-new",
+        storageBucket: "mediapipe-motioncapture-new.firebasestorage.app",
+        messagingSenderId: "194144536036",
+        appId: "1:194144536036:web:01a57bbef13074c42733f1"
+    };
 
-        function saveAlarm() {
-            const time = document.getElementById('alarmTime').value;
-            localStorage.setItem('userAlarm', time);
-            alert("Alarm saved for " + time);
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // TEST: Run this in your console to see if it works
+    console.log("Firebase initialized for project: " + firebaseConfig.projectId);
+
+    document.getElementById('saveBtn').addEventListener('click', () => {
+        const val = document.getElementById('alarmTime').value;
+        if(val) {
+            localStorage.setItem('userAlarm', val);
+            alert("Success! Alarm set for " + val);
         }
+    });
 
-        function triggerAlarm() {
-            // REPLACE THIS URL with your actual Streamlit link after you deploy
-            const streamlitURL = "https://your-app-name.streamlit.app";
-            window.location.href = streamlitURL + "?alarm=active";
+    setInterval(() => {
+        const now = new Date();
+        const currentTime = String(now.getHours()).padStart(2, '0') + ":" + String(now.getMinutes()).padStart(2, '0');
+        const target = localStorage.getItem('userAlarm');
+
+        if (target === currentTime) {
+            triggerAlarm();
         }
-    </script>
+    }, 1000);
+
+    async function triggerAlarm() {
+        try {
+            // This is the "Handshake"
+            await setDoc(doc(db, "alarms", "current"), { isTriggered: true }, { merge: true });
+            console.log("Firestore Updated!");
+            
+            // Redirect to Streamlit
+            window.location.href = "https://your-app-name.streamlit.app"; 
+        } catch (e) {
+            console.error("Connection Error: ", e);
+            alert("Database write failed. Check Firebase Rules!");
+        }
+    }
+</script>
 </body>
 </html>
 document.getElementById('saveBtn').addEventListener('click', () => {
