@@ -66,7 +66,3 @@ def check_alarm_status():
 if check_alarm_status():
     st.title(" SQUAT TIME!")
     # ... rest of your MediaPipe logic ...
-mediapipe
-opencv-python-headless
-numpy
-firebase-admin
