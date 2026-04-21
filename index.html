@@ -24,20 +24,29 @@
 
     <script>
         // 1. Update the Clock display every second
-        setInterval(() => {
-            const now = new Date();
-            document.getElementById('clock').innerText = now.toLocaleTimeString('en-GB');
-        }, 1000);
+       // Wrap the logic in a check to ensure the HTML is loaded first
+document.addEventListener('DOMContentLoaded', () => {
+    
+    const saveButton = document.getElementById('saveBtn');
+    const timeInput = document.getElementById('alarmTime');
 
-        // 2. The logic that was showing on your screen - now safely inside <script>
-        document.getElementById('saveBtn').addEventListener('click', () => { 
-            const time = document.getElementById('alarmTime').value;
+    // Safety: Only run if both elements actually exist on the page
+    if (saveButton && timeInput) {
+        saveButton.addEventListener('click', () => {
+            const time = timeInput.value;
+            
             if (time) {
-                localStorage.setItem('userAlarm', time); 
-                alert("Alarm saved for " + time); 
+                localStorage.setItem('userAlarm', time);
+                alert(" Alarm saved for " + time);
+                console.log("Success: Alarm stored in LocalStorage as " + time);
             } else {
-                alert("Please select a time first!");
+                alert(" Please select a time first!");
             }
+        });
+    } else {
+        console.error("Error: Could not find 'saveBtn' or 'alarmTime' in the HTML.");
+    }
+});
         });
     </script>
 </body>
