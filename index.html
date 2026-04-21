@@ -17,18 +17,25 @@
     <h1 style="font-size: 2.5rem;">FitRise: Wake Up & Move</h1>
     <div id="clock">00:00:00</div>
     
-  <input type="time" id="alarmTime">
-    <br>
-    
-   <button id="saveBtn">Set Alarm</button>
-    
-   <script type="module">
-    
-    function updateClock() {
-        const clockElement = document.getElementById('clock');
-        if (clockElement) {
-            const now = new Date();
-            clockElement.innerText = now.toLocaleTimeString('en-GB');
+<input type="time" id="alarmTime">
+<button id="saveBtn">Set Morning Alarm</button>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const saveBtn = document.getElementById('saveBtn');
+        
+        if (saveBtn) {
+            saveBtn.addEventListener('click', () => {
+                const time = document.getElementById('alarmTime').value;
+                if (time) {
+                    localStorage.setItem('userAlarm', time);
+                    alert("Alarm saved for " + time);
+                } else {
+                    alert("Please select a time first!");
+                }
+            });
+        }
+    });
         }
     }
     setInterval(updateClock, 1000);
