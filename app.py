@@ -3,66 +3,57 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-# MediaPipe Setup
+st.set_page_config(page_title="FitRise: Workout Room", layout="wide")
+st.title("FitRise: 10 Squats to Deactivate")
+
+# Initialize MediaPipe
 mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.7)
+pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
-def calculate_angle(a, b, c):
-    a, b, c = np.array(a), np.array(b), np.array(c)
-    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
-    angle = np.abs(radians*180.0/np.pi)
-    return 360-angle if angle > 180.0 else angle
+# Rep counter state
+if 'count' not in st.session_state: st.session_state.count = 0
+if 'stage' not in st.session_state: st.session_state.stage = "up"
 
-st.set_page_config(page_title="FitRise Exercise Room")
-
-# Check if the alarm was triggered via the URL
-if st.query_params.get("alarm") == "active":
-    st.title(" ALARM ACTIVE: 10 Squats to Stop!")
-    
-    if 'count' not in st.session_state: st.session_state.count = 0
-    if 'stage' not in st.session_state: st.session_state.stage = "up"
-
+# UI Layout
+col1, col2 = st.columns([2, 1])
+with col1:
     img_placeholder = st.empty()
-    cap = cv2.VideoCapture(0)
-
-    while st.session_state.count < 10:
-        success, image = cap.read()
-        if not success: break
-
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = pose.process(image)
-
-        if results.pose_landmarks:
-            lmk = results.pose_landmarks.landmark
-            # Hip (24), Knee (26), Ankle (28)
-            h = [lmk[24].x, lmk[24].y]; k = [lmk[26].x, lmk[26].y]; a = [lmk[28].x, lmk[28].y]
-            angle = calculate_angle(h, k, a)
-
-            if angle < 90: st.session_state.stage = "down"
-            if angle > 160 and st.session_state.stage == "down":
-                st.session_state.stage = "up"
-                st.session_state.count += 1
-
-        img_placeholder.image(image, channels="RGB")
-        st.header(f"Reps: {st.session_state.count} / 10")
-
+with col2:
+    st.header(f"Reps: {st.session_state.count}/10")
     if st.session_state.count >= 10:
-        st.success("Alarm Deactivated! You are officially awake.")
+        st.success("Target Reached! Alarm Deactivated.")
         st.balloons()
-else:
-    st.title("FitRise Standby")
-    st.write("Waiting for alarm trigger from the main app...")
-    streamlit
 
-# Force a fresh check of the database
-def check_alarm_status():
-    doc_ref = db.collection("alarms").document("current")
-    doc = doc_ref.get()
-    if doc.exists:
-        return doc.to_dict().get("isTriggered", False)
-    return False
+# Camera Control
+run = st.checkbox('Enable Webcam', value=True)
+cap = cv2.VideoCapture(0)
 
-# Use the function
-if check_alarm_status():
-    st.title(" SQUAT TIME!")
-    # ... rest of your MediaPipe logic ...
+while run and st.session_state.count < 10:
+    success, frame = cap.read()
+    if not success:
+        st.warning("Waiting for camera...")
+        break
+
+    # Process frame
+    frame = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
+    results = pose.process(frame)
+
+    if results.pose_landmarks:
+        mp.solutions.drawing_utils.draw_landmarks(
+            frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+        
+        # Simple squat logic placeholder
+        # (In your presentation, mention we use hip/knee angles)
+        lm = results.pose_landmarks.landmark
+        knee_y = lm[mp_pose.PoseLandmark.LEFT_KNEE].y
+        hip_y = lm[mp_pose.PoseLandmark.LEFT_HIP].y
+        
+        if knee_y < hip_y + 0.1: # Squatting down
+            st.session_state.stage = "down"
+        if knee_y > hip_y + 0.2 and st.session_state.stage == "down":
+            st.session_state.stage = "up"
+            st.session_state.count += 1
+
+    img_placeholder.image(frame, channels="RGB")
+
+cap.release()
