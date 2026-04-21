@@ -3,17 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FitRise Alarm</title>
+    <title>FitRise | Wake Up & Move</title>
     <style>
-        body { background: #121212; color: #00ff88; font-family: 'Arial', sans-serif; text-align: center; padding-top: 100px; }
-        #clock { font-size: 8rem; font-weight: bold; margin-bottom: 20px; }
-        input[type="time"] { font-size: 2rem; padding: 10px; border-radius: 8px; border: none; margin-bottom: 20px; }
-        .btn { background: #00ff88; color: #121212; border: none; padding: 15px 30px; font-size: 1.2rem; border-radius: 8px; cursor: pointer; transition: 0.3s; font-weight: bold;}
-        .btn:hover { background: #00cc6e; transform: scale(1.05); }
+        :root { --neon-green: #00ff88; --dark-bg: #0a0a0a; --glass: rgba(255, 255, 255, 0.05); }
+        body {
+            background-color: var(--dark-bg); color: white; font-family: 'Segoe UI', sans-serif;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            height: 100vh; margin: 0; overflow: hidden;
+        }
+        .container {
+            text-align: center; background: var(--glass); padding: 40px 60px;
+            border-radius: 24px; backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+        }
+        h1 { font-size: 1.5rem; letter-spacing: 4px; color: var(--neon-green); margin: 0; }
+        #clock { font-size: 7rem; font-weight: 800; margin: 20px 0; text-shadow: 0 0 30px rgba(0, 255, 136, 0.3); }
+        .controls { display: flex; flex-direction: column; gap: 15px; }
+        input[type="time"] {
+            background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white; padding: 12px; font-size: 1.5rem; border-radius: 12px; text-align: center;
+        }
+        #saveBtn {
+            background: var(--neon-green); color: black; border: none; padding: 15px 30px;
+            font-size: 1.1rem; font-weight: bold; border-radius: 12px; cursor: pointer; transition: 0.3s;
+        }
+        #saveBtn:hover { transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0, 255, 136, 0.4); }
     </style>
 </head>
 <body>
-
     <h1 style="font-size: 2.5rem;">FitRise: Wake Up & Move</h1>
     <div id="clock">00:00:00</div>
     
