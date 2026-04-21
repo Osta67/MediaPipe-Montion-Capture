@@ -21,26 +21,19 @@
 <button id="saveBtn">Set Morning Alarm</button>
 
 <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const saveBtn = document.getElementById('saveBtn');
-        
-        if (saveBtn) {
-            saveBtn.addEventListener('click', () => {
-                const time = document.getElementById('alarmTime').value;
-                if (time) {
-                    localStorage.setItem('userAlarm', time);
-                    alert("Alarm saved for " + time);
-                } else {
-                    alert("Please select a time first!");
-                }
-            });
-        }
-    });
+    function updateClock() {
+        const clockElement = document.getElementById('clock');
+        if (clockElement) {
+            const now = new Date();
+            // Forces HH:MM:SS format
+            clockElement.innerText = now.toLocaleTimeString('en-GB');
         }
     }
     setInterval(updateClock, 1000);
-    updateClock(); // Run immediately so it doesn't start at 00:00:00
+    updateClock();
+</script>
 
+<script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { getFirestore, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
@@ -56,19 +49,11 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
-    // 3. THE SAVE BUTTON LOGIC
-    document.addEventListener('DOMContentLoaded', () => {
-        const saveBtn = document.getElementById('saveBtn');
-        if (saveBtn) {
-            saveBtn.addEventListener('click', () => {
-                const timeValue = document.getElementById('alarmTime').value;
-                if (timeValue) {
-                    localStorage.setItem('userAlarm', timeValue);
-                    alert(" Alarm saved for " + timeValue);
-                } else {
-                    alert("Please select a time!");
-                }
-            });
+    document.getElementById('saveBtn').addEventListener('click', () => {
+        const timeVal = document.getElementById('alarmTime').value;
+        if (timeVal) {
+            localStorage.setItem('userAlarm', timeVal);
+            alert(" Alarm saved for " + timeVal);
         }
     });
 
@@ -78,15 +63,11 @@
         const savedAlarm = localStorage.getItem('userAlarm');
 
         if (savedAlarm === currentHHMM && !window.triggered) {
-            window.triggered = true; // Prevents looping
-            console.log("ALARM MATCH! Redirecting...");
-            
+            window.triggered = true;
             try {
                 await setDoc(doc(db, "alarms", "current"), { isTriggered: true }, { merge: true });
                 window.location.href = "https://your-app-name.streamlit.app";
             } catch (e) {
-                console.error("Firestore Error:", e);
-                // Fallback: Redirect anyway if Firebase fails
                 window.location.href = "https://your-app-name.streamlit.app";
             }
         }
