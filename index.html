@@ -22,101 +22,74 @@
     
    <button id="saveBtn">Set Alarm</button>
     
-    <script>
-        // 1. Update the Clock display every second
-document.addEventListener('DOMContentLoaded', () => {
-    
-    const saveButton = document.getElementById('saveBtn');
-    const timeInput = document.getElementById('alarmTime');
-
-    // Safety: Only run if both elements actually exist on the page
-    if (saveButton && timeInput) {
-        saveButton.addEventListener('click', () => {
-            const time = timeInput.value;
-            
-            if (time) {
-                localStorage.setItem('userAlarm', time);
-                alert(" Alarm saved for " + time);
-                console.log("Success: Alarm stored in LocalStorage as " + time);
-            } else {
-                alert(" Please select a time first!");
-            }
-        });
-    } else {
-        console.error("Error: Could not find 'saveBtn' or 'alarmTime' in the HTML.");
+   <script type="module">
+    // 1. THE CLOCK (Runs independently so it never disappears)
+    function updateClock() {
+        const clockElement = document.getElementById('clock');
+        if (clockElement) {
+            const now = new Date();
+            clockElement.innerText = now.toLocaleTimeString('en-GB');
+        }
     }
-});
-        });
-    </script>
-</body>
-</html>
-    
-<script type="module">
-  const firebaseConfig = {
+    setInterval(updateClock, 1000);
+    updateClock(); // Run immediately so it doesn't start at 00:00:00
+
+    // 2. FIREBASE SETUP
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    const firebaseConfig = {
         apiKey: "AIzaSyBLNz5NxJkxoeTPtxg_m5P547ID4bkiW7Q",
         authDomain: "mediapipe-motioncapture-new.firebaseapp.com",
         projectId: "mediapipe-motioncapture-new",
         storageBucket: "mediapipe-motioncapture-new.firebasestorage.app",
         messagingSenderId: "194144536036",
         appId: "1:194144536036:web:01a57bbef13074c42733f1"
+    };
 
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
-    // 1. Clock Update
-   // Replace your current setInterval logic with this check
-const now = new Date();
-const currentHHMM = String(now.getHours()).padStart(2, '0') + ":" + String(now.getMinutes()).padStart(2, '0');
-const savedAlarm = localStorage.getItem('userAlarm'); // Ensure this is exactly "HH:MM"
-
-console.log(`Debug: Current=${currentHHMM} | Target=${savedAlarm}`);
-
-if (currentHHMM === savedAlarm) {
-    // Only trigger once so it doesn't loop
-    if (!window.alarmHasTriggered) {
-        window.alarmHasTriggered = true;
-        triggerAlarm();
-    }
-}
-    }, 1000);
-
-async function triggerAlarm() {
-    console.log("ALARM HIT! Updating UI...");
-    
-    // 1. Update Firebase
-    try {
-        await setDoc(doc(db, "alarms", "current"), { 
-            isTriggered: true,
-            timestamp: new Date() 
-        }, { merge: true });
-    } catch (e) {
-        console.error("Firebase update failed:", e);
-    }
-
-    // 2. Instead of forcing a redirect, show a button
-    const alarmDiv = document.createElement('div');
-    alarmDiv.innerHTML = `
-        <div style="position:fixed; top:0; left:0; width:100%; height:100%; background:red; z-index:9999; display:flex; align-items:center; justify-content:center; flex-direction:column;">
-            <h1 style="color:white; font-size:5rem;">ALARM!</h1>
-            <button id="startWorkoutBtn" style="padding:20px 40px; font-size:2rem; cursor:pointer;">START WORKOUT</button>
-        </div>
-    `;
-    document.body.appendChild(alarmDiv);
-
-    // 3. Make the button redirect
-    document.getElementById('startWorkoutBtn').onclick = () => {
-        window.location.href = "https://your-app-name.streamlit.app";
-    };
-}
-    // Button Listener
-    document.getElementById('saveBtn').addEventListener('click', () => {
-        const time = document.getElementById('alarmTime').value;
-        localStorage.setItem('userAlarm', time);
-        alert("Alarm set for " + time);
+    // 3. THE SAVE BUTTON LOGIC
+    document.addEventListener('DOMContentLoaded', () => {
+        const saveBtn = document.getElementById('saveBtn');
+        if (saveBtn) {
+            saveBtn.addEventListener('click', () => {
+                const timeValue = document.getElementById('alarmTime').value;
+                if (timeValue) {
+                    localStorage.setItem('userAlarm', timeValue);
+                    alert(" Alarm saved for " + timeValue);
+                } else {
+                    alert("Please select a time!");
+                }
+            });
+        }
     });
+
+    // 4. THE REDIRECT TRIGGER
+    setInterval(async () => {
+        const now = new Date();
+        const currentHHMM = String(now.getHours()).padStart(2, '0') + ":" + String(now.getMinutes()).padStart(2, '0');
+        const savedAlarm = localStorage.getItem('userAlarm');
+
+        if (savedAlarm === currentHHMM && !window.triggered) {
+            window.triggered = true; // Prevents looping
+            console.log("ALARM MATCH! Redirecting...");
+            
+            try {
+                await setDoc(doc(db, "alarms", "current"), { isTriggered: true }, { merge: true });
+                window.location.href = "https://your-app-name.streamlit.app";
+            } catch (e) {
+                console.error("Firestore Error:", e);
+                // Fallback: Redirect anyway if Firebase fails
+                window.location.href = "https://your-app-name.streamlit.app";
+            }
+        }
+    }, 1000);
 </script>
 </body>
 </html>
+    
 document.getElementById('saveBtn').addEventListener('click', () => {
     const time = document.getElementById('alarmTime').value;
     localStorage.setItem('userAlarm', time);
