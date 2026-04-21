@@ -56,42 +56,50 @@
     const db = getFirestore(app);
 
     // 1. Clock Update
-    setInterval(() => {
-        const now = new Date();
-        const currentTime = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-        document.getElementById('clock').innerText = now.toLocaleTimeString('en-GB');
+   // Replace your current setInterval logic with this check
+const now = new Date();
+const currentHHMM = String(now.getHours()).padStart(2, '0') + ":" + String(now.getMinutes()).padStart(2, '0');
+const savedAlarm = localStorage.getItem('userAlarm'); // Ensure this is exactly "HH:MM"
 
-        // 2. Check the Alarm
-        const savedAlarm = localStorage.getItem('userAlarm');
-        
-        // We log this so you can see the comparison in the Inspect -> Console
-        console.log(`Checking: Current(${currentTime}) vs Saved(${savedAlarm})`);
+console.log(`Debug: Current=${currentHHMM} | Target=${savedAlarm}`);
 
-        if (savedAlarm === currentTime) {
-            triggerAlarm();
-        }
+if (currentHHMM === savedAlarm) {
+    // Only trigger once so it doesn't loop
+    if (!window.alarmHasTriggered) {
+        window.alarmHasTriggered = true;
+        triggerAlarm();
+    }
+}
     }, 1000);
 
-    async function triggerAlarm() {
-        console.log("ALARM TRIGGERED!");
-        
-        try {
-            // A. Update Firebase so Streamlit knows to start the camera
-            await setDoc(doc(db, "alarms", "current"), { 
-                isTriggered: true,
-                timestamp: new Date() 
-            }, { merge: true });
-
-            // B. Perform the Redirect
-            // IMPORTANT: Ensure this URL starts with https://
-            const streamlitURL = "https://your-app-name.streamlit.app"; 
-            window.location.href = streamlitURL;
-
-        } catch (error) {
-            console.error("Redirect failed:", error);
-        }
+async function triggerAlarm() {
+    console.log("ALARM HIT! Updating UI...");
+    
+    // 1. Update Firebase
+    try {
+        await setDoc(doc(db, "alarms", "current"), { 
+            isTriggered: true,
+            timestamp: new Date() 
+        }, { merge: true });
+    } catch (e) {
+        console.error("Firebase update failed:", e);
     }
 
+    // 2. Instead of forcing a redirect, show a button
+    const alarmDiv = document.createElement('div');
+    alarmDiv.innerHTML = `
+        <div style="position:fixed; top:0; left:0; width:100%; height:100%; background:red; z-index:9999; display:flex; align-items:center; justify-content:center; flex-direction:column;">
+            <h1 style="color:white; font-size:5rem;">ALARM!</h1>
+            <button id="startWorkoutBtn" style="padding:20px 40px; font-size:2rem; cursor:pointer;">START WORKOUT</button>
+        </div>
+    `;
+    document.body.appendChild(alarmDiv);
+
+    // 3. Make the button redirect
+    document.getElementById('startWorkoutBtn').onclick = () => {
+        window.location.href = "https://your-app-name.streamlit.app";
+    };
+}
     // Button Listener
     document.getElementById('saveBtn').addEventListener('click', () => {
         const time = document.getElementById('alarmTime').value;
