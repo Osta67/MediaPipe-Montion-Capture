@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Gesture Alarm</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Import MediaPipe Tasks API -->
+    <script type="module">
+        import {
+            HandLandmarker,
+            FilesetResolver,
+            DrawingUtils
+        } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
+
+        // DOM Elements
+        const video = document.getElementById("webcam");
+        const canvasElement = document.getElementById("output_canvas");
+        const canvasCtx = canvasElement.getContext("2d");
+        const statusText = document.getElementById("status-text");
+        const startBtn = document.getElementById("start-btn");
+        const timeInput = document.getElementById("time-input");
+        const timerDisplay = document.getElementById("timer-display");
+        const progressContainer = document.getElementById("progress-container");
+        const progressFill = document.getElementById("progress-fill");
+        const loader = document.getElementById("loader");
+        const appUi = document.getElementById("app-ui");
+
+        // App State
+        let handLandmarker = undefined;
+        let webcamRunning = false;
+        let lastVideoTime = -1;
+        let timerRunning = false;
+        let alarmActive = false;
+        let remainingSeconds = 0;
+        let timerInterval = null;
+        let fistCount = 0;
+        let gestureState = "WAITING_FOR_OPEN"; // WAITING_FOR_OPEN or READY_FOR_FIST
+
+        // Audio Context for the Alarm Beep
+        let audioCtx;
+        let beepInterval;
+
+        // --- 1. INITIALIZE MEDIAPIPE ---
+        const createHandLandmarker = async () => {
+            try {
+                // Reverted back to the highly stable 0.10.0 version
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+                );
+                handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
+                        delegate: "CPU" // CPU for highest cross-browser compatibility
+                    },
+                    runningMode: "VIDEO",
+                    numHands: 1 // Only need to track 1 hand for this game
+                });
+                
+                // Hide loader, show UI
+                loader.classList.add("hidden");
+                appUi.classList.remove("hidden");
+                appUi.classList.add("flex");
+                
+                // Start webcam automatically
+                enableCam();
+            } catch (error) {
+                console.error("Failed to load MediaPipe:", error);
+                const loaderText = document.querySelector("#loader p");
+                loaderText.innerText = "Error loading AI model. Please check console.";
+                loaderText.classList.replace("text-slate-300", "text-red-400");
+                loaderText.classList.add("font-bold", "mt-4");
+            }
+        };
+        createHandLandmarker();
+
+        // --- 2. WEBCAM & RENDERING LOGIC ---
+        function enableCam() {
+            if (!handLandmarker) return;
+            const constraints = { video: { width: 640, height: 480 } };
+
+            navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+                video.srcObject = stream;
+                video.addEventListener("loadeddata", () => {
+                    canvasElement.width = video.videoWidth;
+                    canvasElement.height = video.videoHeight;
+                    webcamRunning = true;
+                    predictWebcam();
+                });
+            }).catch(err => {
+                statusText.innerText = "Camera permission denied!";
+                statusText.className = "text-red-400 font-bold";
+            });
+        }
+
+        async function predictWebcam() {
+            // Draw video to canvas (mirrored for natural UX)
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.translate(canvasElement.width, 0);
+            canvasCtx.scale(-1, 1);
+            canvasCtx.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+
+            // Run MediaPipe Detection
+            let startTimeMs = performance.now();
+            if (lastVideoTime !== video.currentTime) {
+                lastVideoTime = video.currentTime;
+                const results = handLandmarker.detectForVideo(video, startTimeMs);
+
+                // Process Results
+                if (results.landmarks && results.landmarks.length > 0) {
+                    const landmarks = results.landmarks[0];
+                    const handedness = results.handednesses[0][0].categoryName;
+                    
+                    // Note: Webcam is mirrored, so a physical right hand appears as "Left" to the model.
+                    const isPhysicalRightHand = handedness === "Left"; 
+                    
+                    // Draw Hand Skeletons
+                    const drawingUtils = new DrawingUtils(canvasCtx);
+                    drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS, {
+                        color: isPhysicalRightHand ? "#00FF00" : "#FF0000",
+                        lineWidth: 4
+                    });
+                    drawingUtils.drawLandmarks(landmarks, { color: "#FFFFFF", lineWidth: 2 });
+
+                    // Run Game Logic ONLY if Alarm is active and it's the RIGHT hand
+                    if (alarmActive && isPhysicalRightHand) {
+                        checkGesture(landmarks);
+                    }
+                }
+            }
+            canvasCtx.restore();
+
+            // Loop
+            if (webcamRunning) {
+                window.requestAnimationFrame(predictWebcam);
+            }
+        }
+
+        // --- 3. GESTURE MATH (Open vs Fist) ---
+        function checkGesture(landmarks) {
+            // 0 is wrist. Tips are 8, 12, 16, 20. Knuckles (PIPs) are 6, 10, 14, 18.
+            const isFingerFolded = (tipIdx, pipIdx) => {
+                const tipDist = Math.hypot(landmarks[tipIdx].x - landmarks[0].x, landmarks[tipIdx].y - landmarks[0].y);
+                const pipDist = Math.hypot(landmarks[pipIdx].x - landmarks[0].x, landmarks[pipIdx].y - landmarks[0].y);
+                return tipDist < pipDist; // If tip is closer to wrist than knuckle, it's folded
+            };
+
+            const indexFolded = isFingerFolded(8, 6);
+            const middleFolded = isFingerFolded(12, 10);
+            const ringFolded = isFingerFolded(16, 14);
+            const pinkyFolded = isFingerFolded(20, 18);
+
+            const allFolded = indexFolded && middleFolded && ringFolded && pinkyFolded;
+            const noneFolded = !indexFolded && !middleFolded && !ringFolded && !pinkyFolded;
+
+            // State Machine Logic
+            if (noneFolded) {
+                statusText.innerText = "Hand Open! Now make a fist.";
+                gestureState = "READY_FOR_FIST";
+            } else if (allFolded && gestureState === "READY_FOR_FIST") {
+                // Registered a fist!
+                fistCount++;
+                gestureState = "WAITING_FOR_OPEN";
+                updateProgress();
+
+                if (fistCount >= 5) {
+                    stopAlarm();
+                } else {
+                    statusText.innerText = `Fist counted (${fistCount}/5)! Open hand again.`;
+                }
+            } else if (gestureState === "WAITING_FOR_OPEN") {
+                statusText.innerText = "Open your right hand completely...";
+            }
+        }
+
+        // --- 4. TIMER & ALARM LOGIC ---
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playBeep() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime); // A5 note
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.2); // Beep duration
+        }
+
+        startBtn.addEventListener("click", () => {
+            if (timerRunning || alarmActive) return;
+            
+            initAudio(); // Requires user interaction to initialize
+            const seconds = parseInt(timeInput.value);
+            if (isNaN(seconds) || seconds <= 0) return;
+
+            remainingSeconds = seconds;
+            timerRunning = true;
+            timeInput.disabled = true;
+            startBtn.classList.add("opacity-50", "cursor-not-allowed");
+            statusText.innerText = "Timer running...";
+            
+            updateTimerDisplay();
+
+            timerInterval = setInterval(() => {
+                remainingSeconds--;
+                updateTimerDisplay();
+                
+                if (remainingSeconds <= 0) {
+                    clearInterval(timerInterval);
+                    timerRunning = false;
+                    triggerAlarm();
+                }
+            }, 1000);
+        });
+
+        function updateTimerDisplay() {
+            const m = Math.floor(remainingSeconds / 60).toString().padStart(2, '0');
+            const s = (remainingSeconds % 60).toString().padStart(2, '0');
+            timerDisplay.innerText = `${m}:${s}`;
+        }
+
+        function triggerAlarm() {
+            alarmActive = true;
+            fistCount = 0;
+            gestureState = "WAITING_FOR_OPEN";
+            
+            statusText.innerText = "WAKE UP! Open/close RIGHT hand 5 times!";
+            statusText.classList.replace("text-blue-400", "text-red-500");
+            progressContainer.classList.remove("hidden");
+            updateProgress();
+
+            beepInterval = setInterval(playBeep, 500); // Beep every half second
+        }
+
+        function stopAlarm() {
+            alarmActive = false;
+            clearInterval(beepInterval);
+            
+            statusText.innerText = "Alarm stopped! Good morning.";
+            statusText.classList.replace("text-red-500", "text-green-400");
+            timeInput.disabled = false;
+            startBtn.classList.remove("opacity-50", "cursor-not-allowed");
+            
+            setTimeout(() => {
+                progressContainer.classList.add("hidden");
+                statusText.classList.replace("text-green-400", "text-blue-400");
+                statusText.innerText = "Ready to set timer.";
+            }, 3000);
+        }
+
+        function updateProgress() {
+            const percentage = (fistCount / 5) * 100;
+            progressFill.style.width = `${percentage}%`;
+        }
+
+    </script>
+</head>
+<body class="bg-slate-900 text-white min-h-screen flex flex-col items-center justify-center p-6 font-sans">
+    
+    <div class="max-w-xl w-full bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border border-slate-700">
+        
+        <!-- Header -->
+        <div class="bg-slate-950 p-4 text-center border-b border-slate-700">
+            <h1 class="text-2xl font-bold tracking-wider text-blue-400">MediaPipe Smart Alarm</h1>
+            <p class="text-xs text-slate-400 mt-1">Snooze it with your Right Hand</p>
+        </div>
+
+        <!-- Loader -->
+        <div id="loader" class="p-12 text-center">
+            <svg class="animate-spin h-10 w-10 text-blue-500 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="text-slate-300">Loading AI Vision Model...</p>
+        </div>
+
+        <!-- Main App UI -->
+        <div id="app-ui" class="hidden flex-col items-center p-6 space-y-6">
+            
+            <!-- Video Container -->
+            <div class="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-slate-600">
+                <video id="webcam" class="hidden" autoplay playsinline></video>
+                <!-- Canvas is horizontally flipped to act like a mirror -->
+                <canvas id="output_canvas" class="absolute top-0 left-0 w-full h-full object-cover"></canvas>
+            </div>
+
+            <!-- Status Text -->
+            <div id="status-text" class="text-lg font-semibold text-blue-400 text-center min-h-[28px]">
+                Ready to set timer.
+            </div>
+
+            <!-- Progress Bar (Hidden by default) -->
+            <div id="progress-container" class="hidden w-full bg-slate-700 rounded-full h-4 overflow-hidden">
+                <div id="progress-fill" class="bg-green-500 h-4 rounded-full transition-all duration-300 w-0"></div>
+            </div>
+
+            <!-- Timer Controls -->
+            <div class="flex items-center gap-4 bg-slate-900 p-4 rounded-xl w-full justify-between">
+                <div class="flex flex-col">
+                    <label class="text-xs text-slate-400 uppercase tracking-wider mb-1">Set Seconds</label>
+                    <input type="number" id="time-input" value="5" min="1" class="bg-slate-700 text-white text-xl font-bold rounded px-3 py-2 w-24 text-center focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                
+                <div id="timer-display" class="text-4xl font-mono font-bold text-white tracking-widest">
+                    00:00
+                </div>
+
+                <button id="start-btn" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded-lg transition-colors shadow-lg shadow-blue-500/30">
+                    START
+                </button>
+            </div>
+            
+        </div>
+    </div>
+
+    <!-- Instructions -->
+    <div class="mt-8 text-slate-400 text-sm max-w-lg text-center space-y-2">
+        <p>1. Set a short timer and click Start.</p>
+        <p>2. When the alarm sounds, hold up your <strong>RIGHT</strong> hand to the camera (the skeleton lines will turn <span class="text-green-400">green</span> if it's the correct hand).</p>
+        <p>3. Fully open your hand, then squeeze it into a tight fist. Repeat 5 times.</p>
+    </div>
+
+</body>
+</html>
