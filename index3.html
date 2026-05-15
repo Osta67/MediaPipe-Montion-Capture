@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Pose Workout Alarm</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Import MediaPipe Tasks Pose API -->
+    <script type="module">
+        import {
+            PoseLandmarker,
+            FilesetResolver,
+            DrawingUtils
+        } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
+
+        // DOM Elements
+        const video = document.getElementById("webcam");
+        const canvasElement = document.getElementById("output_canvas");
+        const canvasCtx = canvasElement.getContext("2d");
+        const statusText = document.getElementById("status-text");
+        const startBtn = document.getElementById("start-btn");
+        const timeInput = document.getElementById("time-input");
+        const timerDisplay = document.getElementById("timer-display");
+        const progressContainer = document.getElementById("progress-container");
+        const progressFill = document.getElementById("progress-fill");
+        const loader = document.getElementById("loader");
+        const appUi = document.getElementById("app-ui");
+
+        // App State
+        let poseLandmarker = undefined;
+        let webcamRunning = false;
+        let lastVideoTime = -1;
+        let timerRunning = false;
+        let alarmActive = false;
+        let remainingSeconds = 0;
+        let timerInterval = null;
+        let repCount = 0;
+        let exerciseState = "WAITING_FOR_EXTENSION"; // WAITING_FOR_EXTENSION or READY_FOR_CRUNCH
+
+        // Distance Thresholds (in pixels relative to a 640x480 canvas)
+        const CLOSE_THRESHOLD = 140; // Max distance to count as a "crunch"
+        const EXTENSION_THRESHOLD = 220; // Min distance to reset back to standing/extended
+
+        // Audio Context for the Alarm Beep
+        let audioCtx;
+        let beepInterval;
+
+        // --- 1. INITIALIZE MEDIAPIPE POSE ---
+        const createPoseLandmarker = async () => {
+            try {
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+                );
+                poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+                        delegate: "CPU"
+                    },
+                    runningMode: "VIDEO",
+                    numPoses: 1
+                });
+                
+                // Hide loader, show UI
+                loader.classList.add("hidden");
+                appUi.classList.remove("hidden");
+                appUi.classList.add("flex");
+                
+                // Start webcam automatically
+                enableCam();
+            } catch (error) {
+                console.error("Failed to load MediaPipe Pose:", error);
+                const loaderText = document.querySelector("#loader p");
+                loaderText.innerText = "Error loading AI model. Please check console.";
+                loaderText.classList.replace("text-slate-300", "text-red-400");
+                loaderText.classList.add("font-bold", "mt-4");
+            }
+        };
+        createPoseLandmarker();
+
+        // --- 2. WEBCAM & RENDERING LOGIC ---
+        function enableCam() {
+            if (!poseLandmarker) return;
+            const constraints = { video: { width: 640, height: 480 } };
+
+            navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+                video.srcObject = stream;
+                video.addEventListener("loadeddata", () => {
+                    canvasElement.width = video.videoWidth;
+                    canvasElement.height = video.videoHeight;
+                    webcamRunning = true;
+                    predictWebcam();
+                });
+            }).catch(err => {
+                statusText.innerText = "Camera permission denied!";
+                statusText.className = "text-red-400 font-bold";
+            });
+        }
+
+        async function predictWebcam() {
+            // Draw video to canvas (mirrored for natural UX)
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.translate(canvasElement.width, 0);
+            canvasCtx.scale(-1, 1);
+            canvasCtx.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+
+            // Run MediaPipe Pose Detection
+            let startTimeMs = performance.now();
+            if (lastVideoTime !== video.currentTime) {
+                lastVideoTime = video.currentTime;
+                const results = poseLandmarker.detectForVideo(video, startTimeMs);
+
+                // Process Results
+                if (results.landmarks && results.landmarks.length > 0) {
+                    const landmarks = results.landmarks[0];
+                    
+                    // Draw Pose Skeleton
+                    const drawingUtils = new DrawingUtils(canvasCtx);
+                    drawingUtils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
+                        color: alarmActive ? "#00FF00" : "#3b82f6",
+                        lineWidth: 4
+                    });
+                    drawingUtils.drawLandmarks(landmarks, { color: "#FFFFFF", lineWidth: 1, radius: 3 });
+
+                    // Process Shoulder to Knee distance logic
+                    processPoseDistance(landmarks);
+                }
+            }
+            canvasCtx.restore();
+
+            // Loop
+            if (webcamRunning) {
+                window.requestAnimationFrame(predictWebcam);
+            }
+        }
+
+        // --- 3. DISTANCE MATH & STATE MACHINE ---
+        function processPoseDistance(landmarks) {
+            // MediaPipe Pose Keypoints: 
+            // Left Shoulder: 11, Right Shoulder: 12
+            // Left Knee: 25, Right Knee: 26
+
+            // Convert normalized coordinates back to canvas pixel spaces
+            const getPixelCoords = (landmark) => ({
+                x: landmark.x * canvasElement.width,
+                y: landmark.y * canvasElement.height
+            });
+
+            const leftShoulder = getPixelCoords(landmarks[11]);
+            const rightShoulder = getPixelCoords(landmarks[12]);
+            const leftKnee = getPixelCoords(landmarks[25]);
+            const rightKnee = getPixelCoords(landmarks[26]);
+
+            // Calculate Midpoints of shoulders and knees
+            const midShoulder = {
+                x: (leftShoulder.x + rightShoulder.x) / 2,
+                y: (leftShoulder.y + rightShoulder.y) / 2
+            };
+            const midKnee = {
+                x: (leftKnee.x + rightKnee.x) / 2,
+                y: (leftKnee.y + rightKnee.y) / 2
+            };
+
+            // 2D Euclidean Distance between mid-shoulder and mid-knee
+            const distance = Math.hypot(midKnee.x - midShoulder.x, midKnee.y - midShoulder.y);
+
+            // Draw a guide line connecting the midpoints on top of the mirrored display
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(midShoulder.x, midShoulder.y);
+            canvasCtx.lineTo(midKnee.x, midKnee.y);
+            canvasCtx.strokeStyle = distance < CLOSE_THRESHOLD ? "#22c55e" : "#e11d48";
+            canvasCtx.lineWidth = 6;
+            canvasCtx.stroke();
+
+            // Handle exercise tracking state machine if alarm is firing
+            if (alarmActive) {
+                if (distance > EXTENSION_THRESHOLD) {
+                    statusText.innerText = "Body extended! Now bring your shoulders and knees close.";
+                    exerciseState = "READY_FOR_CRUNCH";
+                } else if (distance < CLOSE_THRESHOLD && exerciseState === "READY_FOR_CRUNCH") {
+                    repCount++;
+                    exerciseState = "WAITING_FOR_EXTENSION";
+                    updateProgress();
+
+                    if (repCount >= 5) {
+                        stopAlarm();
+                    } else {
+                        statusText.innerText = `Rep counted (${repCount}/5)! Straighten back out.`;
+                    }
+                } else if (exerciseState === "WAITING_FOR_EXTENSION") {
+                    statusText.innerText = "Stand up straight or extend your body...";
+                }
+            } else {
+                // When alarm is idle, display real-time distance metrics for debugging setup
+                statusText.innerText = `Current Core Distance: ${Math.round(distance)}px`;
+            }
+        }
+
+        // --- 4. TIMER & ALARM LOGIC ---
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playBeep() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime); 
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.2);
+        }
+
+        startBtn.addEventListener("click", () => {
+            if (timerRunning || alarmActive) return;
+            
+            initAudio(); 
+            const seconds = parseInt(timeInput.value);
+            if (isNaN(seconds) || seconds <= 0) return;
+
+            remainingSeconds = seconds;
+            timerRunning = true;
+            timeInput.disabled = true;
+            startBtn.classList.add("opacity-50", "cursor-not-allowed");
+            
+            updateTimerDisplay();
+
+            timerInterval = setInterval(() => {
+                remainingSeconds--;
+                updateTimerDisplay();
+                
+                if (remainingSeconds <= 0) {
+                    clearInterval(timerInterval);
+                    timerRunning = false;
+                    triggerAlarm();
+                }
+            }, 1000);
+        });
+
+        function updateTimerDisplay() {
+            const m = Math.floor(remainingSeconds / 60).toString().padStart(2, '0');
+            const s = (remainingSeconds % 60).toString().padStart(2, '0');
+            timerDisplay.innerText = `${m}:${s}`;
+        }
+
+        function triggerAlarm() {
+            alarmActive = true;
+            repCount = 0;
+            exerciseState = "WAITING_FOR_EXTENSION";
+            
+            statusText.className = "text-lg font-semibold text-red-500 text-center min-h-[28px]";
+            progressContainer.classList.remove("hidden");
+            updateProgress();
+
+            beepInterval = setInterval(playBeep, 500); 
+        }
+
+        function stopAlarm() {
+            alarmActive = false;
+            clearInterval(beepInterval);
+            
+            statusText.innerText = "Alarm stopped! Good morning.";
+            statusText.className = "text-lg font-semibold text-green-400 text-center min-h-[28px]";
+            timeInput.disabled = false;
+            startBtn.classList.remove("opacity-50", "cursor-not-allowed");
+            
+            setTimeout(() => {
+                progressContainer.classList.add("hidden");
+                statusText.className = "text-lg font-semibold text-blue-400 text-center min-h-[28px]";
+                statusText.innerText = "Ready to set timer.";
+            }, 3000);
+        }
+
+        function updateProgress() {
+            const percentage = (repCount / 5) * 100;
+            progressFill.style.width = `${percentage}%`;
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-white min-h-screen flex flex-col items-center justify-center p-6 font-sans">
+    
+    <div class="max-w-xl w-full bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border border-slate-700">
+        
+        <!-- Header -->
+        <div class="bg-slate-950 p-4 text-center border-b border-slate-700">
+            <h1 class="text-2xl font-bold tracking-wider text-blue-400">MediaPipe Workout Alarm</h1>
+            <p class="text-xs text-slate-400 mt-1">Snooze it with 5 Shoulders-to-Knees Crunches/Squats</p>
+        </div>
+
+        <!-- Loader -->
+        <div id="loader" class="p-12 text-center">
+            <svg class="animate-spin h-10 w-10 text-blue-500 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="text-slate-300">Loading AI Pose Model...</p>
+        </div>
+
+        <!-- Main App UI -->
+        <div id="app-ui" class="hidden flex-col items-center p-6 space-y-6">
+            
+            <!-- Video Container -->
+            <div class="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-slate-600">
+                <video id="webcam" class="hidden" autoplay playsinline></video>
+                <canvas id="output_canvas" class="absolute top-0 left-0 w-full h-full object-cover"></canvas>
+            </div>
+
+            <!-- Status Text -->
+            <div id="status-text" class="text-lg font-semibold text-blue-400 text-center min-h-[28px]">
+                Ready to set timer.
+            </div>
+
+            <!-- Progress Bar (Hidden by default) -->
+            <div id="progress-container" class="hidden w-full bg-slate-700 rounded-full h-4 overflow-hidden">
+                <div id="progress-fill" class="bg-green-500 h-4 rounded-full transition-all duration-300 w-0"></div>
+            </div>
+
+            <!-- Timer Controls -->
+            <div class="flex items-center gap-4 bg-slate-900 p-4 rounded-xl w-full justify-between">
+                <div class="flex flex-col">
+                    <label class="text-xs text-slate-400 uppercase tracking-wider mb-1">Set Seconds</label>
+                    <input type="number" id="time-input" value="5" min="1" class="bg-slate-700 text-white text-xl font-bold rounded px-3 py-2 w-24 text-center focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                
+                <div id="timer-display" class="text-4xl font-mono font-bold text-white tracking-widest">
+                    00:00
+                </div>
+
+                <button id="start-btn" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded-lg transition-colors shadow-lg shadow-blue-500/30">
+                    START
+                </button>
+            </div>
+            
+        </div>
+    </div>
+
+    <!-- Instructions -->
+    <div class="mt-8 text-slate-400 text-sm max-w-lg text-center space-y-2">
+        <p>1. Set a short timer and click Start.</p>
+        <p>2. Step back so your **shoulders and knees** are both completely visible in the frame.</p>
+        <p>3. Go into a deep crouch, crunch, or squat until the drawn visual guide line turns <span class="text-green-400">Green</span>.</p>
+        <p>4. Stand back up completely to reset. Repeat 5 times to dismiss the alarm.</p>
+    </div>
+
+</body>
+</html>
