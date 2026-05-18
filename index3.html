@@ -3,8 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Pose Workout Alarm</title>
+    <title>PulseAlarm // Smart Workout Wakeup</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&viewport=width=device-width,initial-scale=1.0" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        .font-mono { font-family: 'Space Grotesk', sans-serif; }
+    </style>
+
     <!-- Import MediaPipe Tasks Pose API -->
     <script type="module">
         import {
@@ -18,13 +25,16 @@
         const canvasElement = document.getElementById("output_canvas");
         const canvasCtx = canvasElement.getContext("2d");
         const statusText = document.getElementById("status-text");
+        const statusContainer = document.getElementById("status-container");
         const startBtn = document.getElementById("start-btn");
         const timeInput = document.getElementById("time-input");
+        const exerciseSelect = document.getElementById("exercise-select");
         const timerDisplay = document.getElementById("timer-display");
         const progressContainer = document.getElementById("progress-container");
         const progressFill = document.getElementById("progress-fill");
         const loader = document.getElementById("loader");
         const appUi = document.getElementById("app-ui");
+        const repCounterDisplay = document.getElementById("rep-counter");
 
         // App State
         let poseLandmarker = undefined;
@@ -35,13 +45,9 @@
         let remainingSeconds = 0;
         let timerInterval = null;
         let repCount = 0;
-        let exerciseState = "WAITING_FOR_EXTENSION"; // WAITING_FOR_EXTENSION or READY_FOR_CRUNCH
+        let exerciseState = "UP"; // UP or DOWN for Squats/Pushups; OPEN or CLOSED for Jacks
 
-        // Distance Thresholds (in pixels relative to a 640x480 canvas)
-        const CLOSE_THRESHOLD = 140; // Max distance to count as a "crunch"
-        const EXTENSION_THRESHOLD = 220; // Min distance to reset back to standing/extended
-
-        // Audio Context for the Alarm Beep
+        // Audio Context
         let audioCtx;
         let beepInterval;
 
@@ -60,18 +66,16 @@
                     numPoses: 1
                 });
                 
-                // Hide loader, show UI
                 loader.classList.add("hidden");
                 appUi.classList.remove("hidden");
-                appUi.classList.add("flex");
+                appUi.classList.add("grid");
                 
-                // Start webcam automatically
                 enableCam();
             } catch (error) {
                 console.error("Failed to load MediaPipe Pose:", error);
                 const loaderText = document.querySelector("#loader p");
                 loaderText.innerText = "Error loading AI model. Please check console.";
-                loaderText.classList.replace("text-slate-300", "text-red-400");
+                loaderText.classList.replace("text-slate-400", "text-rose-400");
                 loaderText.classList.add("font-bold", "mt-4");
             }
         };
@@ -92,111 +96,214 @@
                 });
             }).catch(err => {
                 statusText.innerText = "Camera permission denied!";
-                statusText.className = "text-red-400 font-bold";
+                updateStatusStyle("error");
             });
         }
 
         async function predictWebcam() {
-            // Draw video to canvas (mirrored for natural UX)
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
             canvasCtx.translate(canvasElement.width, 0);
             canvasCtx.scale(-1, 1);
             canvasCtx.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
 
-            // Run MediaPipe Pose Detection
             let startTimeMs = performance.now();
             if (lastVideoTime !== video.currentTime) {
                 lastVideoTime = video.currentTime;
                 const results = poseLandmarker.detectForVideo(video, startTimeMs);
 
-                // Process Results
                 if (results.landmarks && results.landmarks.length > 0) {
                     const landmarks = results.landmarks[0];
                     
-                    // Draw Pose Skeleton
                     const drawingUtils = new DrawingUtils(canvasCtx);
                     drawingUtils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
-                        color: alarmActive ? "#00FF00" : "#3b82f6",
-                        lineWidth: 4
+                        color: alarmActive ? "#10B981" : "#6366F1",
+                        lineWidth: 3
                     });
-                    drawingUtils.drawLandmarks(landmarks, { color: "#FFFFFF", lineWidth: 1, radius: 3 });
+                    drawingUtils.drawLandmarks(landmarks, { color: "#FFFFFF", lineWidth: 1, radius: 2 });
 
-                    // Process Shoulder to Knee distance logic
-                    processPoseDistance(landmarks);
+                    // Dynamically routes landmarks based on the chosen exercise selection
+                    processExerciseAI(landmarks);
                 }
             }
             canvasCtx.restore();
 
-            // Loop
             if (webcamRunning) {
                 window.requestAnimationFrame(predictWebcam);
             }
         }
 
-        // --- 3. DISTANCE MATH & STATE MACHINE ---
-        function processPoseDistance(landmarks) {
-            // MediaPipe Pose Keypoints: 
-            // Left Shoulder: 11, Right Shoulder: 12
-            // Left Knee: 25, Right Knee: 26
+        // --- 3. MATH HELPERS ---
+        // Computes joint angle in degrees using three 2D points (e.g., Hip -> Knee -> Ankle)
+        function calculateAngle(p1, p2, p3) {
+            let radians = Math.atan2(p3.y - p2.y, p3.x - p2.x) - Math.atan2(p1.y - p2.y, p1.x - p2.x);
+            let angle = Math.abs((radians * 180.0) / Math.PI);
+            if (angle > 180.0) angle = 360.0 - angle;
+            return angle;
+        }
 
-            // Convert normalized coordinates back to canvas pixel spaces
-            const getPixelCoords = (landmark) => ({
-                x: landmark.x * canvasElement.width,
-                y: landmark.y * canvasElement.height
-            });
+        // --- 4. ADVANCED REPETITION TRACKING ENGINE ---
+        function processExerciseAI(landmarks) {
+            const currentExercise = exerciseSelect.value;
+            
+            // Core Keypoints Mapping
+            const leftShoulder = landmarks[11];
+            const rightShoulder = landmarks[12];
+            const leftElbow = landmarks[13];
+            const rightElbow = landmarks[14];
+            const leftWrist = landmarks[15];
+            const rightWrist = landmarks[16];
+            const leftHip = landmarks[23];
+            const rightHip = landmarks[24];
+            const leftKnee = landmarks[25];
+            const rightKnee = landmarks[26];
+            const leftAnkle = landmarks[27];
+            const rightAnkle = landmarks[28];
 
-            const leftShoulder = getPixelCoords(landmarks[11]);
-            const rightShoulder = getPixelCoords(landmarks[12]);
-            const leftKnee = getPixelCoords(landmarks[25]);
-            const rightKnee = getPixelCoords(landmarks[26]);
+            // ------------------------------------
+            // EXERCISE 1: SQUATS (Using Knee Angle)
+            // ------------------------------------
+            if (currentExercise === "squat") {
+                const leftKneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
+                const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
+                const avgKneeAngle = (leftKneeAngle + rightKneeAngle) / 2;
 
-            // Calculate Midpoints of shoulders and knees
-            const midShoulder = {
-                x: (leftShoulder.x + rightShoulder.x) / 2,
-                y: (leftShoulder.y + rightShoulder.y) / 2
-            };
-            const midKnee = {
-                x: (leftKnee.x + rightKnee.x) / 2,
-                y: (leftKnee.y + rightKnee.y) / 2
-            };
-
-            // 2D Euclidean Distance between mid-shoulder and mid-knee
-            const distance = Math.hypot(midKnee.x - midShoulder.x, midKnee.y - midShoulder.y);
-
-            // Draw a guide line connecting the midpoints on top of the mirrored display
-            canvasCtx.beginPath();
-            canvasCtx.moveTo(midShoulder.x, midShoulder.y);
-            canvasCtx.lineTo(midKnee.x, midKnee.y);
-            canvasCtx.strokeStyle = distance < CLOSE_THRESHOLD ? "#22c55e" : "#e11d48";
-            canvasCtx.lineWidth = 6;
-            canvasCtx.stroke();
-
-            // Handle exercise tracking state machine if alarm is firing
-            if (alarmActive) {
-                if (distance > EXTENSION_THRESHOLD) {
-                    statusText.innerText = "Body extended! Now bring your shoulders and knees close.";
-                    exerciseState = "READY_FOR_CRUNCH";
-                } else if (distance < CLOSE_THRESHOLD && exerciseState === "READY_FOR_CRUNCH") {
-                    repCount++;
-                    exerciseState = "WAITING_FOR_EXTENSION";
-                    updateProgress();
-
-                    if (repCount >= 5) {
-                        stopAlarm();
-                    } else {
-                        statusText.innerText = `Rep counted (${repCount}/5)! Straighten back out.`;
+                if (alarmActive) {
+                    if (avgKneeAngle < 105) { // Deep Squat reached
+                        if (exerciseState === "UP") {
+                            repCount++;
+                            exerciseState = "DOWN";
+                            updateProgress();
+                            if (repCount >= 5) return stopAlarm();
+                        }
+                        statusText.innerText = `Nice depth! Now drive back up.`;
+                        updateStatusStyle("success");
+                    } else if (avgKneeAngle > 160) { // Fully Extended
+                        exerciseState = "UP";
+                        statusText.innerText = "Squat down until your thighs are parallel to ground.";
+                        updateStatusStyle("active");
                     }
-                } else if (exerciseState === "WAITING_FOR_EXTENSION") {
-                    statusText.innerText = "Stand up straight or extend your body...";
+                } else {
+                    statusText.innerText = `Calibrating Squat Angle: ${Math.round(avgKneeAngle)}°`;
+                    updateStatusStyle("idle");
                 }
-            } else {
-                // When alarm is idle, display real-time distance metrics for debugging setup
-                statusText.innerText = `Current Core Distance: ${Math.round(distance)}px`;
+            }
+
+            // ------------------------------------
+            // EXERCISE 2: PUSH-UPS (Using Elbow Flexion)
+            // ------------------------------------
+            else if (currentExercise === "pushup") {
+                const leftElbowAngle = calculateAngle(leftShoulder, leftElbow, leftWrist);
+                const rightElbowAngle = calculateAngle(rightShoulder, rightElbow, rightWrist);
+                const avgElbowAngle = (leftElbowAngle + rightElbowAngle) / 2;
+
+                if (alarmActive) {
+                    if (avgElbowAngle < 95) { // Down phase
+                        exerciseState = "DOWN";
+                        statusText.innerText = "Excellent depth! Now push up.";
+                        updateStatusStyle("success");
+                    } else if (avgElbowAngle > 155 && exerciseState === "DOWN") { // Pushed back up
+                        repCount++;
+                        exerciseState = "UP";
+                        updateProgress();
+                        if (repCount >= 5) return stopAlarm();
+                    } else {
+                        statusText.innerText = "Lower your chest toward the floor.";
+                        updateStatusStyle("active");
+                    }
+                } else {
+                    statusText.innerText = `Calibrating Elbow Angle: ${Math.round(avgElbowAngle)}°`;
+                    updateStatusStyle("idle");
+                }
+            }
+
+            // ------------------------------------
+            // EXERCISE 3: JUMPING JACKS (Hands & Feet Width)
+            // ------------------------------------
+            else if (currentExercise === "jack") {
+                const handDistance = Math.abs(leftWrist.y - leftShoulder.y); // Relative to upper body height
+                const feetDistance = Math.hypot(leftAnkle.x - rightAnkle.x, leftAnkle.y - rightAnkle.y);
+                const shoulderWidth = Math.hypot(leftShoulder.x - rightShoulder.x, leftShoulder.y - rightShoulder.y);
+
+                // Check if hands are overhead and feet are wide apart
+                const handsOverHead = (leftWrist.y < leftShoulder.y) && (rightWrist.y < rightShoulder.y);
+                const feetWide = feetDistance > (shoulderWidth * 1.5);
+
+                if (alarmActive) {
+                    if (handsOverHead && feetWide) {
+                        if (exerciseState === "CLOSED") {
+                            repCount++;
+                            exerciseState = "OPEN";
+                            updateProgress();
+                            if (repCount >= 5) return stopAlarm();
+                        }
+                        statusText.innerText = "Jumping jack out! Now snap back in.";
+                        updateStatusStyle("success");
+                    } else if (!handsOverHead && !feetWide) {
+                        exerciseState = "CLOSED";
+                        statusText.innerText = "Jump out! Hands high, feet apart.";
+                        updateStatusStyle("active");
+                    }
+                } else {
+                    statusText.innerText = handsOverHead && feetWide ? "Jack Position: Detected" : "Stand tall to begin jumping jacks.";
+                    updateStatusStyle("idle");
+                }
+            }
+
+            // ------------------------------------
+            // EXERCISE 4: CRUNCHES (Torso Distance)
+            // ------------------------------------
+            else if (currentExercise === "crunch") {
+                const canvasW = canvasElement.width;
+                const canvasH = canvasElement.height;
+                const midShoulder = {
+                    x: ((leftShoulder.x + rightShoulder.x) / 2) * canvasW,
+                    y: ((leftShoulder.y + rightShoulder.y) / 2) * canvasH
+                };
+                const midKnee = {
+                    x: ((leftKnee.x + rightKnee.x) / 2) * canvasW,
+                    y: ((leftKnee.y + rightKnee.y) / 2) * canvasH
+                };
+                const distance = Math.hypot(midKnee.x - midShoulder.x, midKnee.y - midShoulder.y);
+
+                if (alarmActive) {
+                    if (distance > 220) {
+                        exerciseState = "UP";
+                        statusText.innerText = "Extended! Now compress into a crunch.";
+                        updateStatusStyle("active");
+                    } else if (distance < 140 && exerciseState === "UP") {
+                        repCount++;
+                        exerciseState = "DOWN";
+                        updateProgress();
+                        if (repCount >= 5) return stopAlarm();
+                    } else if (exerciseState === "DOWN") {
+                        statusText.innerText = "Rep tracked! Return to extended pose.";
+                        updateStatusStyle("success");
+                    }
+                } else {
+                    statusText.innerText = `Calibrating Core Distance: ${Math.round(distance)}px`;
+                    updateStatusStyle("idle");
+                }
             }
         }
 
-        // --- 4. TIMER & ALARM LOGIC ---
+        // --- 5. UI STATE MANAGER ---
+        function updateStatusStyle(state) {
+            statusContainer.className = "p-4 rounded-xl text-center font-medium border text-sm transition-all duration-300 ";
+            if (state === "idle") {
+                statusContainer.classList.add("bg-slate-800/50", "border-slate-700", "text-indigo-400");
+            } else if (state === "active") {
+                statusContainer.classList.add("bg-indigo-950/40", "border-indigo-500/50", "text-indigo-300", "animate-pulse");
+            } else if (state === "success") {
+                statusContainer.classList.add("bg-emerald-950/40", "border-emerald-500/50", "text-emerald-400");
+            } else if (state === "warning") {
+                statusContainer.classList.add("bg-amber-950/40", "border-amber-500/50", "text-amber-400");
+            } else if (state === "error") {
+                statusContainer.classList.add("bg-rose-950/40", "border-rose-500/50", "text-rose-400");
+            }
+        }
+
+        // --- 6. TIMER & AUDIO LOGIC ---
         function initAudio() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -229,7 +336,9 @@
             remainingSeconds = seconds;
             timerRunning = true;
             timeInput.disabled = true;
-            startBtn.classList.add("opacity-50", "cursor-not-allowed");
+            exerciseSelect.disabled = true;
+            startBtn.disabled = true;
+            startBtn.className = "w-full bg-slate-800 text-slate-500 font-bold py-4 px-6 rounded-xl cursor-not-allowed border border-slate-700 transition-all duration-200";
             
             updateTimerDisplay();
 
@@ -254,10 +363,10 @@
         function triggerAlarm() {
             alarmActive = true;
             repCount = 0;
-            exerciseState = "WAITING_FOR_EXTENSION";
+            exerciseState = "RESET";
             
-            statusText.className = "text-lg font-semibold text-red-500 text-center min-h-[28px]";
-            progressContainer.classList.remove("hidden");
+            progressContainer.classList.remove("opacity-0");
+            progressContainer.classList.add("opacity-100");
             updateProgress();
 
             beepInterval = setInterval(playBeep, 500); 
@@ -267,88 +376,138 @@
             alarmActive = false;
             clearInterval(beepInterval);
             
-            statusText.innerText = "Alarm stopped! Good morning.";
-            statusText.className = "text-lg font-semibold text-green-400 text-center min-h-[28px]";
+            statusText.innerText = "Alarm cleared! Great morning.";
+            updateStatusStyle("success");
+            
             timeInput.disabled = false;
-            startBtn.classList.remove("opacity-50", "cursor-not-allowed");
+            exerciseSelect.disabled = false;
+            startBtn.disabled = false;
+            startBtn.className = "w-full bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg shadow-indigo-500/20 active:scale-[0.98]";
             
             setTimeout(() => {
-                progressContainer.classList.add("hidden");
-                statusText.className = "text-lg font-semibold text-blue-400 text-center min-h-[28px]";
-                statusText.innerText = "Ready to set timer.";
-            }, 3000);
+                progressContainer.classList.remove("opacity-100");
+                progressContainer.classList.add("opacity-0");
+                repCounterDisplay.innerText = "0";
+                statusText.innerText = "System standing by.";
+                updateStatusStyle("idle");
+            }, 4000);
         }
 
         function updateProgress() {
             const percentage = (repCount / 5) * 100;
             progressFill.style.width = `${percentage}%`;
+            repCounterDisplay.innerText = repCount;
         }
     </script>
 </head>
-<body class="bg-slate-900 text-white min-h-screen flex flex-col items-center justify-center p-6 font-sans">
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 antialiased">
     
-    <div class="max-w-xl w-full bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border border-slate-700">
+    <div class="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-7xl h-[350px] bg-indigo-500/10 blur-[140px] pointer-events-none rounded-full"></div>
+
+    <div class="max-w-5xl w-full flex flex-col space-y-6 relative z-10">
         
         <!-- Header -->
-        <div class="bg-slate-950 p-4 text-center border-b border-slate-700">
-            <h1 class="text-2xl font-bold tracking-wider text-blue-400">MediaPipe Workout Alarm</h1>
-            <p class="text-xs text-slate-400 mt-1">Snooze it with 5 Shoulders-to-Knees Crunches/Squats</p>
-        </div>
+        <header class="flex flex-col sm:flex-row items-center justify-between border-b border-slate-800/60 pb-5 gap-4">
+            <div class="text-center sm:text-left">
+                <div class="flex items-center justify-center sm:justify-start gap-2">
+                    <span class="h-2.5 w-2.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                    <h1 class="text-xl font-bold tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">PULSE//ALARM</h1>
+                </div>
+                <p class="text-xs text-slate-400 mt-1">Smart visual-verification conditioning software</p>
+            </div>
+        </header>
 
         <!-- Loader -->
-        <div id="loader" class="p-12 text-center">
-            <svg class="animate-spin h-10 w-10 text-blue-500 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        <div id="loader" class="bg-slate-900/60 border border-slate-800 rounded-3xl p-16 text-center backdrop-blur-md shadow-xl my-auto">
+            <svg class="animate-spin h-9 w-9 text-indigo-500 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-100" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            <p class="text-slate-300">Loading AI Pose Model...</p>
+            <p class="text-slate-400 text-sm font-medium tracking-wide">Syncing local machine hardware with neural engine models...</p>
         </div>
 
-        <!-- Main App UI -->
-        <div id="app-ui" class="hidden flex-col items-center p-6 space-y-6">
+        <!-- Main Workspace Interface Layout -->
+        <div id="app-ui" class="hidden grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             
-            <!-- Video Container -->
-            <div class="relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-slate-600">
-                <video id="webcam" class="hidden" autoplay playsinline></video>
-                <canvas id="output_canvas" class="absolute top-0 left-0 w-full h-full object-cover"></canvas>
-            </div>
-
-            <!-- Status Text -->
-            <div id="status-text" class="text-lg font-semibold text-blue-400 text-center min-h-[28px]">
-                Ready to set timer.
-            </div>
-
-            <!-- Progress Bar (Hidden by default) -->
-            <div id="progress-container" class="hidden w-full bg-slate-700 rounded-full h-4 overflow-hidden">
-                <div id="progress-fill" class="bg-green-500 h-4 rounded-full transition-all duration-300 w-0"></div>
-            </div>
-
-            <!-- Timer Controls -->
-            <div class="flex items-center gap-4 bg-slate-900 p-4 rounded-xl w-full justify-between">
-                <div class="flex flex-col">
-                    <label class="text-xs text-slate-400 uppercase tracking-wider mb-1">Set Seconds</label>
-                    <input type="number" id="time-input" value="5" min="1" class="bg-slate-700 text-white text-xl font-bold rounded px-3 py-2 w-24 text-center focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <!-- Left Grid Pane: Video Feed -->
+            <div class="lg:col-span-7 flex flex-col space-y-4">
+                <div class="relative w-full aspect-video bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-2xl ring-1 ring-slate-800/50">
+                    <video id="webcam" class="hidden" autoplay playsinline></video>
+                    <canvas id="output_canvas" class="absolute top-0 left-0 w-full h-full object-cover"></canvas>
+                    
+                    <div class="absolute top-4 right-4 bg-slate-950/80 backdrop-blur-md px-4 py-2 rounded-xl border border-slate-800 flex items-center gap-3">
+                        <span class="text-[10px] uppercase font-bold tracking-widest text-slate-400">Target Reps</span>
+                        <span id="rep-counter" class="font-mono text-xl font-bold text-emerald-400">0</span>
+                        <span class="font-mono text-xs text-slate-500">/ 5</span>
+                    </div>
                 </div>
+
+                <!-- Live Engine System Status Display Banner -->
+                <div id="status-container" class="p-4 rounded-xl text-center font-medium border text-sm bg-slate-800/50 border-slate-700 text-indigo-400 transition-all duration-300">
+                    <span id="status-text">Booting client components...</span>
+                </div>
+            </div>
+
+            <!-- Right Grid Pane: Operations Panel Controls -->
+            <div class="lg:col-span-5 flex flex-col space-y-5">
                 
-                <div id="timer-display" class="text-4xl font-mono font-bold text-white tracking-widest">
-                    00:00
+                <!-- Dynamic Progress Panel Card -->
+                <div id="progress-container" class="opacity-0 bg-slate-900/40 border border-slate-800 rounded-2xl p-5 transition-all duration-300 space-y-3">
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="font-bold text-slate-300 tracking-wide uppercase">Alarm Event Active</span>
+                        <span class="text-rose-400 font-medium animate-pulse">Perform Routine to Dismiss</span>
+                    </div>
+                    <div class="w-full bg-slate-800 rounded-full h-3 overflow-hidden p-[2px]">
+                        <div id="progress-fill" class="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-300 w-0"></div>
+                    </div>
                 </div>
 
-                <button id="start-btn" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded-lg transition-colors shadow-lg shadow-blue-500/30">
-                    START
-                </button>
+                <!-- Core Control Management Terminal -->
+                <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 backdrop-blur-md shadow-xl flex flex-col space-y-5">
+                    <h3 class="text-sm font-bold tracking-wide uppercase text-slate-400">Configurations</h3>
+                    
+                    <!-- EXERCISE CHOOSE SELECTOR MENU -->
+                    <div class="flex flex-col space-y-1.5">
+                        <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Select Snooze Routine Target</label>
+                        <select id="exercise-select" class="bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-4 py-3 text-sm font-medium focus:outline-none focus:border-indigo-500 transition-colors cursor-pointer w-full">
+                            <option value="squat">🏋️‍♂️ Bodyweight Squats (Knee Angles)</option>
+                            <option value="pushup">🤸‍♂️ Military Push-Ups (Elbow Extension)</option>
+                            <option value="jack">🏃‍♂️ Jumping Jacks (Overhead Motion)</option>
+                            <option value="crunch">🧘‍♂️ Floor Crunches (Shoulder-to-Knee)</option>
+                        </select>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center bg-slate-950/50 p-4 rounded-xl border border-slate-800/60">
+                        <div class="flex flex-col">
+                            <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Countdown Delay</label>
+                            <div class="flex items-center gap-2">
+                                <input type="number" id="time-input" value="5" min="1" class="bg-slate-900 border border-slate-800 text-white text-lg font-bold rounded-lg px-3 py-1.5 w-20 text-center focus:outline-none focus:border-indigo-500 transition-colors">
+                                <span class="text-xs text-slate-500 font-medium">seconds</span>
+                            </div>
+                        </div>
+                        
+                        <div class="flex flex-col items-center sm:items-end">
+                            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Remaining</span>
+                            <div id="timer-display" class="text-4xl font-mono font-bold text-white tracking-tight bg-slate-900 px-4 py-1 rounded-lg border border-slate-800">
+                                00:00
+                            </div>
+                        </div>
+                    </div>
+
+                    <button id="start-btn" class="w-full bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg shadow-indigo-500/20 active:scale-[0.98]">
+                        ARM SYSTEM TIMER
+                    </button>
+                </div>
+
+                <!-- Onboarding Instructions System Card -->
+                <div class="bg-slate-900/20 border border-slate-800/40 rounded-xl p-4 text-xs text-slate-400 space-y-2">
+                    <div class="font-bold text-slate-300 uppercase tracking-widest text-[10px]">Tracking Architecture Requirements</div>
+                    <p class="leading-relaxed"><strong class="text-slate-300">Squats & Jumping Jacks:</strong> Adjust camera to display your entire full body footprint.</p>
+                    <p class="leading-relaxed"><strong class="text-slate-300">Push-ups:</strong> Set your phone/laptop on the floor and position yourself parallel in a side-profile view.</p>
+                </div>
+
             </div>
-            
         </div>
     </div>
-
-    <!-- Instructions -->
-    <div class="mt-8 text-slate-400 text-sm max-w-lg text-center space-y-2">
-        <p>1. Set a short timer and click Start.</p>
-        <p>2. Step back so your **shoulders and knees** are both completely visible in the frame.</p>
-        <p>3. Go into a deep crouch, crunch, or squat until the drawn visual guide line turns <span class="text-green-400">Green</span>.</p>
-        <p>4. Stand back up completely to reset. Repeat 5 times to dismiss the alarm.</p>
-    </div>
-
 </body>
 </html>
