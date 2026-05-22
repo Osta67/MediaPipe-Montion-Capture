@@ -28,12 +28,15 @@
         const statusContainer = document.getElementById("status-container");
         const startBtn = document.getElementById("start-btn");
         const timeInput = document.getElementById("time-input");
+        const repInput = document.getElementById("rep-input");
+        const exerciseSelect = document.getElementById("exercise-select");
         const timerDisplay = document.getElementById("timer-display");
         const progressContainer = document.getElementById("progress-container");
         const progressFill = document.getElementById("progress-fill");
         const loader = document.getElementById("loader");
         const appUi = document.getElementById("app-ui");
         const repCounterDisplay = document.getElementById("rep-counter");
+        const targetRepDisplay = document.getElementById("target-rep-display");
 
         // App State
         let poseLandmarker = undefined;
@@ -44,11 +47,8 @@
         let remainingSeconds = 0;
         let timerInterval = null;
         let repCount = 0;
-        let exerciseState = "WAITING_FOR_EXTENSION"; 
-
-        // Distance Thresholds (Pixels on 640x480 canvas)
-        const CLOSE_THRESHOLD = 140; 
-        const EXTENSION_THRESHOLD = 220; 
+        let targetReps = 5; // Managed dynamically now
+        let exerciseState = "UP"; // UP or DOWN for Squats/Pushups; OPEN or CLOSED for Jacks
 
         // Audio Context
         let audioCtx;
@@ -125,7 +125,8 @@
                     });
                     drawingUtils.drawLandmarks(landmarks, { color: "#FFFFFF", lineWidth: 1, radius: 2 });
 
-                    processPoseDistance(landmarks);
+                    // Dynamically routes landmarks based on the chosen exercise selection
+                    processExerciseAI(landmarks);
                 }
             }
             canvasCtx.restore();
@@ -135,63 +136,158 @@
             }
         }
 
-        // --- 3. DISTANCE MATH & STATE MACHINE ---
-        function processPoseDistance(landmarks) {
-            const getPixelCoords = (landmark) => ({
-                x: landmark.x * canvasElement.width,
-                y: landmark.y * canvasElement.height
-            });
+        // --- 3. MATH HELPERS ---
+        function calculateAngle(p1, p2, p3) {
+            let radians = Math.atan2(p3.y - p2.y, p3.x - p2.x) - Math.atan2(p1.y - p2.y, p1.x - p2.x);
+            let angle = Math.abs((radians * 180.0) / Math.PI);
+            if (angle > 180.0) angle = 360.0 - angle;
+            return angle;
+        }
 
-            const leftShoulder = getPixelCoords(landmarks[11]);
-            const rightShoulder = getPixelCoords(landmarks[12]);
-            const leftKnee = getPixelCoords(landmarks[25]);
-            const rightKnee = getPixelCoords(landmarks[26]);
+        // --- 4. ADVANCED REPETITION TRACKING ENGINE ---
+        function processExerciseAI(landmarks) {
+            const currentExercise = exerciseSelect.value;
+            
+            // Core Keypoints Mapping
+            const leftShoulder = landmarks[11];
+            const rightShoulder = landmarks[12];
+            const leftElbow = landmarks[13];
+            const rightElbow = landmarks[14];
+            const leftWrist = landmarks[15];
+            const rightWrist = landmarks[16];
+            const leftHip = landmarks[23];
+            const rightHip = landmarks[24];
+            const leftKnee = landmarks[25];
+            const rightKnee = landmarks[26];
+            const leftAnkle = landmarks[27];
+            const rightAnkle = landmarks[28];
 
-            const midShoulder = {
-                x: (leftShoulder.x + rightShoulder.x) / 2,
-                y: (leftShoulder.y + rightShoulder.y) / 2
-            };
-            const midKnee = {
-                x: (leftKnee.x + rightKnee.x) / 2,
-                y: (leftKnee.y + rightKnee.y) / 2
-            };
+            // ------------------------------------
+            // EXERCISE 1: SQUATS (Using Knee Angle)
+            // ------------------------------------
+            if (currentExercise === "squat") {
+                const leftKneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
+                const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
+                const avgKneeAngle = (leftKneeAngle + rightKneeAngle) / 2;
 
-            const distance = Math.hypot(midKnee.x - midShoulder.x, midKnee.y - midShoulder.y);
+                if (alarmActive) {
+                    if (avgKneeAngle < 105) { // Deep Squat reached
+                        if (exerciseState === "UP") {
+                            repCount++;
+                            exerciseState = "DOWN";
+                            updateProgress();
+                            if (repCount >= targetReps) return stopAlarm();
+                        }
+                        statusText.innerText = `Nice depth! Now drive back up.`;
+                        updateStatusStyle("success");
+                    } else if (avgKneeAngle > 160) { // Fully Extended
+                        exerciseState = "UP";
+                        statusText.innerText = "Squat down until your thighs are parallel to ground.";
+                        updateStatusStyle("active");
+                    }
+                } else {
+                    statusText.innerText = `Calibrating Squat Angle: ${Math.round(avgKneeAngle)}°`;
+                    updateStatusStyle("idle");
+                }
+            }
 
-            canvasCtx.beginPath();
-            canvasCtx.moveTo(midShoulder.x, midShoulder.y);
-            canvasCtx.lineTo(midKnee.x, midKnee.y);
-            canvasCtx.strokeStyle = distance < CLOSE_THRESHOLD ? "#10B981" : "#F43F5E";
-            canvasCtx.lineWidth = 6;
-            canvasCtx.stroke();
+            // ------------------------------------
+            // EXERCISE 2: PUSH-UPS (Using Elbow Flexion)
+            // ------------------------------------
+            else if (currentExercise === "pushup") {
+                const leftElbowAngle = calculateAngle(leftShoulder, leftElbow, leftWrist);
+                const rightElbowAngle = calculateAngle(rightShoulder, rightElbow, rightWrist);
+                const avgElbowAngle = (leftElbowAngle + rightElbowAngle) / 2;
 
-            if (alarmActive) {
-                if (distance > EXTENSION_THRESHOLD) {
-                    statusText.innerText = "Body extended! Now drop low.";
-                    updateStatusStyle("active");
-                    exerciseState = "READY_FOR_CRUNCH";
-                } else if (distance < CLOSE_THRESHOLD && exerciseState === "READY_FOR_CRUNCH") {
-                    repCount++;
-                    exerciseState = "WAITING_FOR_EXTENSION";
-                    updateProgress();
-
-                    if (repCount >= 5) {
-                        stopAlarm();
+                if (alarmActive) {
+                    if (avgElbowAngle < 95) { // Down phase
+                        exerciseState = "DOWN";
+                        statusText.innerText = "Excellent depth! Now push up.";
+                        updateStatusStyle("success");
+                    } else if (avgElbowAngle > 155 && exerciseState === "DOWN") { // Pushed back up
+                        repCount++;
+                        exerciseState = "UP";
+                        updateProgress();
+                        if (repCount >= targetReps) return stopAlarm();
                     } else {
-                        statusText.innerText = `Rep detected! Return to standard extension.`;
+                        statusText.innerText = "Lower your chest toward the floor.";
+                        updateStatusStyle("active");
+                    }
+                } else {
+                    statusText.innerText = `Calibrating Elbow Angle: ${Math.round(avgElbowAngle)}°`;
+                    updateStatusStyle("idle");
+                }
+            }
+
+            // ------------------------------------
+            // EXERCISE 3: JUMPING JACKS (Hands & Feet Width)
+            // ------------------------------------
+            else if (currentExercise === "jack") {
+                const feetDistance = Math.hypot(leftAnkle.x - rightAnkle.x, leftAnkle.y - rightAnkle.y);
+                const shoulderWidth = Math.hypot(leftShoulder.x - rightShoulder.x, leftShoulder.y - rightShoulder.y);
+
+                const handsOverHead = (leftWrist.y < leftShoulder.y) && (rightWrist.y < rightShoulder.y);
+                const feetWide = feetDistance > (shoulderWidth * 1.5);
+
+                if (alarmActive) {
+                    if (handsOverHead && feetWide) {
+                        if (exerciseState === "CLOSED") {
+                            repCount++;
+                            exerciseState = "OPEN";
+                            updateProgress();
+                            if (repCount >= targetReps) return stopAlarm();
+                        }
+                        statusText.innerText = "Jumping jack out! Now snap back in.";
+                        updateStatusStyle("success");
+                    } else if (!handsOverHead && !feetWide) {
+                        exerciseState = "CLOSED";
+                        statusText.innerText = "Jump out! Hands high, feet apart.";
+                        updateStatusStyle("active");
+                    }
+                } else {
+                    statusText.innerText = handsOverHead && feetWide ? "Jack Position: Detected" : "Stand tall to begin jumping jacks.";
+                    updateStatusStyle("idle");
+                }
+            }
+
+            // ------------------------------------
+            // EXERCISE 4: CRUNCHES (Torso Distance)
+            // ------------------------------------
+            else if (currentExercise === "crunch") {
+                const canvasW = canvasElement.width;
+                const canvasH = canvasElement.height;
+                const midShoulder = {
+                    x: ((leftShoulder.x + rightShoulder.x) / 2) * canvasW,
+                    y: ((leftShoulder.y + rightShoulder.y) / 2) * canvasH
+                };
+                const midKnee = {
+                    x: ((leftKnee.x + rightKnee.x) / 2) * canvasW,
+                    y: ((leftKnee.y + rightKnee.y) / 2) * canvasH
+                };
+                const distance = Math.hypot(midKnee.x - midShoulder.x, midKnee.y - midShoulder.y);
+
+                if (alarmActive) {
+                    if (distance > 220) {
+                        exerciseState = "UP";
+                        statusText.innerText = "Extended! Now compress into a crunch.";
+                        updateStatusStyle("active");
+                    } else if (distance < 140 && exerciseState === "UP") {
+                        repCount++;
+                        exerciseState = "DOWN";
+                        updateProgress();
+                        if (repCount >= targetReps) return stopAlarm();
+                    } else if (exerciseState === "DOWN") {
+                        statusText.innerText = "Rep tracked! Return to extended pose.";
                         updateStatusStyle("success");
                     }
-                } else if (exerciseState === "WAITING_FOR_EXTENSION") {
-                    statusText.innerText = "Straighten your posture to reset...";
-                    updateStatusStyle("warning");
+                } else {
+                    statusText.innerText = `Calibrating Core Distance: ${Math.round(distance)}px`;
+                    updateStatusStyle("idle");
                 }
-            } else {
-                statusText.innerText = `Calibrating Distance: ${Math.round(distance)}px`;
-                updateStatusStyle("idle");
             }
         }
 
-        // Helper style state controller
+        // --- 5. UI STATE MANAGER ---
         function updateStatusStyle(state) {
             statusContainer.className = "p-4 rounded-xl text-center font-medium border text-sm transition-all duration-300 ";
             if (state === "idle") {
@@ -207,7 +303,7 @@
             }
         }
 
-        // --- 4. TIMER & ALARM LOGIC ---
+        // --- 6. TIMER & AUDIO LOGIC ---
         function initAudio() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -235,11 +331,19 @@
             
             initAudio(); 
             const seconds = parseInt(timeInput.value);
+            const reps = parseInt(repInput.value);
+            
             if (isNaN(seconds) || seconds <= 0) return;
+            if (isNaN(reps) || reps <= 0) return;
 
             remainingSeconds = seconds;
+            targetReps = reps;
+            targetRepDisplay.innerText = `/ ${targetReps}`;
+
             timerRunning = true;
             timeInput.disabled = true;
+            repInput.disabled = true;
+            exerciseSelect.disabled = true;
             startBtn.disabled = true;
             startBtn.className = "w-full bg-slate-800 text-slate-500 font-bold py-4 px-6 rounded-xl cursor-not-allowed border border-slate-700 transition-all duration-200";
             
@@ -266,7 +370,7 @@
         function triggerAlarm() {
             alarmActive = true;
             repCount = 0;
-            exerciseState = "WAITING_FOR_EXTENSION";
+            exerciseState = "RESET";
             
             progressContainer.classList.remove("opacity-0");
             progressContainer.classList.add("opacity-100");
@@ -279,10 +383,12 @@
             alarmActive = false;
             clearInterval(beepInterval);
             
-            statusText.innerText = "Alarm cleared! Great work turning off your routine.";
+            statusText.innerText = "Alarm cleared! Great morning.";
             updateStatusStyle("success");
             
             timeInput.disabled = false;
+            repInput.disabled = false;
+            exerciseSelect.disabled = false;
             startBtn.disabled = false;
             startBtn.className = "w-full bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg shadow-indigo-500/20 active:scale-[0.98]";
             
@@ -290,13 +396,13 @@
                 progressContainer.classList.remove("opacity-100");
                 progressContainer.classList.add("opacity-0");
                 repCounterDisplay.innerText = "0";
-                statusText.innerText = "Ready for your next window.";
+                statusText.innerText = "System standing by.";
                 updateStatusStyle("idle");
             }, 4000);
         }
 
         function updateProgress() {
-            const percentage = (repCount / 5) * 100;
+            const percentage = (repCount / targetReps) * 100;
             progressFill.style.width = `${percentage}%`;
             repCounterDisplay.innerText = repCount;
         }
@@ -304,12 +410,11 @@
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 antialiased">
     
-    <!-- Background glow design elements -->
     <div class="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-7xl h-[350px] bg-indigo-500/10 blur-[140px] pointer-events-none rounded-full"></div>
 
     <div class="max-w-5xl w-full flex flex-col space-y-6 relative z-10">
         
-        <!-- Premium Navigation Header Header -->
+        <!-- Header -->
         <header class="flex flex-col sm:flex-row items-center justify-between border-b border-slate-800/60 pb-5 gap-4">
             <div class="text-center sm:text-left">
                 <div class="flex items-center justify-center sm:justify-start gap-2">
@@ -318,12 +423,9 @@
                 </div>
                 <p class="text-xs text-slate-400 mt-1">Smart visual-verification conditioning software</p>
             </div>
-            <div class="flex gap-2">
-                <span class="px-3 py-1 bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-medium rounded-full">Default Exercise: Crunch/Squat</span>
-            </div>
         </header>
 
-        <!-- Loader Component -->
+        <!-- Loader -->
         <div id="loader" class="bg-slate-900/60 border border-slate-800 rounded-3xl p-16 text-center backdrop-blur-md shadow-xl my-auto">
             <svg class="animate-spin h-9 w-9 text-indigo-500 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -341,11 +443,10 @@
                     <video id="webcam" class="hidden" autoplay playsinline></video>
                     <canvas id="output_canvas" class="absolute top-0 left-0 w-full h-full object-cover"></canvas>
                     
-                    <!-- Floating Rep Dashboard Tag overlay inside video canvas -->
-                    <div class="absolute top-4 right-4 bg-slate-950/80 backdrop-blur-md px-4 py-2 rounded-xl border border-slate-800 flex items-center gap-3">
-                        <span class="text-[10px] uppercase font-bold tracking-widest text-slate-400">Reps completed</span>
+                    <div class="absolute top-4 right-4 bg-slate-950/80 backdrop-blur-md px-4 py-2 rounded-xl border border-slate-800 flex items-center gap-2">
+                        <span class="text-[10px] uppercase font-bold tracking-widest text-slate-400">Target Reps</span>
                         <span id="rep-counter" class="font-mono text-xl font-bold text-emerald-400">0</span>
-                        <span class="font-mono text-xs text-slate-500">/ 5</span>
+                        <span id="target-rep-display" class="font-mono text-xs text-slate-500">/ 5</span>
                     </div>
                 </div>
 
@@ -362,7 +463,7 @@
                 <div id="progress-container" class="opacity-0 bg-slate-900/40 border border-slate-800 rounded-2xl p-5 transition-all duration-300 space-y-3">
                     <div class="flex justify-between items-center text-xs">
                         <span class="font-bold text-slate-300 tracking-wide uppercase">Alarm Event Active</span>
-                        <span class="text-rose-400 font-medium animate-pulse">Perform Exercise to Dismiss</span>
+                        <span class="text-rose-400 font-medium animate-pulse">Perform Routine to Dismiss</span>
                     </div>
                     <div class="w-full bg-slate-800 rounded-full h-3 overflow-hidden p-[2px]">
                         <div id="progress-fill" class="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-300 w-0"></div>
@@ -370,21 +471,43 @@
                 </div>
 
                 <!-- Core Control Management Terminal -->
-                <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 backdrop-blur-md shadow-xl flex flex-col space-y-6">
+                <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 backdrop-blur-md shadow-xl flex flex-col space-y-5">
                     <h3 class="text-sm font-bold tracking-wide uppercase text-slate-400">Configurations</h3>
                     
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center bg-slate-950/50 p-4 rounded-xl border border-slate-800/60">
-                        <div class="flex flex-col">
-                            <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Countdown Delay</label>
-                            <div class="flex items-center gap-2">
-                                <input type="number" id="time-input" value="5" min="1" class="bg-slate-900 border border-slate-800 text-white text-lg font-bold rounded-lg px-3 py-1.5 w-20 text-center focus:outline-none focus:border-indigo-500 transition-colors">
-                                <span class="text-xs text-slate-500 font-medium">seconds</span>
+                    <!-- EXERCISE CHOOSE SELECTOR MENU -->
+                    <div class="flex flex-col space-y-1.5">
+                        <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Select Snooze Routine Target</label>
+                        <select id="exercise-select" class="bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-4 py-3 text-sm font-medium focus:outline-none focus:border-indigo-500 transition-colors cursor-pointer w-full">
+                            <option value="squat">🏋️‍♂️ Bodyweight Squats (Knee Angles)</option>
+                            <option value="pushup">🤸‍♂️ Military Push-Ups (Elbow Extension)</option>
+                            <option value="jack">RUN Running Jumping Jacks (Overhead Motion)</option>
+                            <option value="crunch">🧘‍♂️ Floor Crunches (Shoulder-to-Knee)</option>
+                        </select>
+                    </div>
+
+                    <!-- Dual Inputs Grid Layout Layout -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950/50 p-4 rounded-xl border border-slate-800/60">
+                        <div class="flex flex-col space-y-3">
+                            <div>
+                                <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Countdown</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="number" id="time-input" value="5" min="1" class="bg-slate-900 border border-slate-800 text-white text-base font-bold rounded-lg px-2.5 py-1.5 w-16 text-center focus:outline-none focus:border-indigo-500 transition-colors">
+                                    <span class="text-[11px] text-slate-500 font-medium">secs</span>
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Target Reps</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="number" id="rep-input" value="5" min="1" class="bg-slate-900 border border-slate-800 text-white text-base font-bold rounded-lg px-2.5 py-1.5 w-16 text-center focus:outline-none focus:border-indigo-500 transition-colors">
+                                    <span class="text-[11px] text-slate-500 font-medium">reps</span>
+                                </div>
                             </div>
                         </div>
                         
-                        <div class="flex flex-col items-center sm:items-end mt-2 sm:mt-0">
-                            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Time Remaining</span>
-                            <div id="timer-display" class="text-4xl font-mono font-bold text-white tracking-tight bg-slate-900 px-4 py-1 rounded-lg border border-slate-800">
+                        <div class="flex flex-col items-center sm:items-end justify-center">
+                            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Timer</span>
+                            <div id="timer-display" class="text-4xl font-mono font-bold text-white tracking-tight bg-slate-900 px-4 py-2 rounded-lg border border-slate-800 min-w-[110px] text-center">
                                 00:00
                             </div>
                         </div>
@@ -395,12 +518,11 @@
                     </button>
                 </div>
 
-                <!-- Micro-Onboarding Instructions System Card -->
-                <div class="bg-slate-900/20 border border-slate-800/40 rounded-xl p-4 text-xs text-slate-400 space-y-2.5">
-                    <div class="font-bold text-slate-300 uppercase tracking-widest text-[10px]">Setup Prerequisites</div>
-                    <p class="leading-relaxed"><strong class="text-slate-300">1. Spatial Alignment:</strong> Position your webcam so your shoulders down to your knees remain tracked seamlessly inside the frame footprint.</p>
-                    <p class="leading-relaxed"><strong class="text-slate-300">2. Active Calibration:</strong> Move into a down compressed crouch profile position until the visual guide metric lights up <span class="text-emerald-400 font-semibold">Green</span>.</p>
-                    <p class="leading-relaxed"><strong class="text-slate-300">3. Reset Requirements:</strong> Return upward into a clean neutral extension frame configuration to safely log individual completed counts.</p>
+                <!-- Onboarding Instructions System Card -->
+                <div class="bg-slate-900/20 border border-slate-800/40 rounded-xl p-4 text-xs text-slate-400 space-y-2">
+                    <div class="font-bold text-slate-300 uppercase tracking-widest text-[10px]">Tracking Architecture Requirements</div>
+                    <p class="leading-relaxed"><strong class="text-slate-300">Squats & Jumping Jacks:</strong> Adjust camera to display your entire full body footprint.</p>
+                    <p class="leading-relaxed"><strong class="text-slate-300">Push-ups:</strong> Set your phone/laptop on the floor and position yourself parallel in a side-profile view.</p>
                 </div>
 
             </div>
