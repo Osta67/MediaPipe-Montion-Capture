@@ -187,13 +187,19 @@
             
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            // Mirror the display layout contextually for intuitive feedback
             canvasCtx.translate(canvasElement.width, 0);
             canvasCtx.scale(-1, 1);
-            canvasCtx.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
 
             let startTimeMs = performance.now();
+            
             if (video.currentTime !== lastVideoTime && video.readyState >= 2) {
                 lastVideoTime = video.currentTime;
+                
+                // Draw camera video feed directly behind standard tracking meshes
+                canvasCtx.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+
                 const results = poseLandmarker.detectForVideo(video, startTimeMs);
 
                 if (results.landmarks && results.landmarks.length > 0) {
@@ -212,7 +218,11 @@
 
                     processExerciseAI(landmarks);
                 }
+            } else {
+                // Keep image continuous if processing frames momentarily lag
+                canvasCtx.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
             }
+            
             canvasCtx.restore();
 
             if (webcamRunning) {
@@ -499,7 +509,7 @@
             exerciseSelect.disabled = false;
             
             startBtn.innerText = "ARM SYSTEM MOVEMENT LOCK";
-            startBtn.className = "w-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-bold py-4 px-6 rounded-xl transition-all font-mono tracking-widest text-xs uppercase shadow-lg shadow-indigo-500/20 active:scale-[0.98]";
+            startBtn.className = "w-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-bold py-4 px-6 rounded-xl transition-all font-mono tracking-widest text-xs uppercase shadow-lg shadow-indigo-500/20 active:scale-[0.98]";
             
             setTimeout(() => {
                 progressContainer.classList.remove("opacity-100");
@@ -597,6 +607,7 @@
                 <div id="video-wrapper" class="relative w-full aspect-video bg-slate-950/90 rounded-2xl overflow-hidden border border-slate-800 shadow-2xl ring-1 ring-slate-800/50 transition-all duration-700 glow-indigo scanline">
                     
                     <video id="webcam" class="hidden" autoplay playsinline muted></video>
+                    
                     <canvas id="output_canvas" class="absolute inset-0 w-full h-full object-cover z-10"></canvas>
                     <div id="tracking-laser" class="hidden absolute left-0 w-full h-[3px] bg-gradient-to-r from-transparent via-rose-500 to-transparent z-20 laser-bar shadow-[0_0_15px_#f43f5e]"></div>
 
