@@ -1,162 +1,256 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PULSE//ALARM — Neural Wakeup System</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-    
-    <style>
-        body { 
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            background-color: #02040a;
-        }
-        .font-mono { 
-            font-family: 'Space Grotesk', sans-serif; 
-        }
-        
-        .scanline::before {
-            content: " ";
-            display: block;
-            position: absolute;
-            top: 0; left: 0; bottom: 0; right: 0;
-            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.3) 50%), linear-gradient(90deg, rgba(99, 102, 241, 0.03), rgba(244, 63, 94, 0.01), rgba(16, 185, 129, 0.03));
-            z-index: 2;
-            background-size: 100% 3px, 4px 100%;
-            pointer-events: none;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PULSE//ALARM — Neural Wake System</title>
 
-        @keyframes laser-sweep {
-            0% { top: 0%; }
-            50% { top: 100%; }
-            100% { top: 0%; }
-        }
-        .laser-bar {
-            animation: laser-sweep 3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-        }
-    </style>
+<script src="https://cdn.tailwindcss.com"></script>
 
-    <script type="module">
-        import {
-            PoseLandmarker,
-            FilesetResolver,
-            DrawingUtils
-        } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
 
-        const video = document.getElementById("webcam");
-        const canvasElement = document.getElementById("output_canvas");
-        const canvasCtx = canvasElement.getContext("2d");
+<style>
+body {
+  font-family: "Inter", sans-serif;
+  background: radial-gradient(circle at top, #0b1220, #02040a);
+  color: #e5e7eb;
+}
 
-        let poseLandmarker;
-        let webcamRunning = false;
-        let lastVideoTime = -1;
+.font-mono {
+  font-family: "Space Grotesk", sans-serif;
+}
 
-        async function init() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { width: 640, height: 480 }
-                });
+/* Subtle glass */
+.glass {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  backdrop-filter: blur(14px);
+}
 
-                video.srcObject = stream;
+/* Cleaner button */
+.btn {
+  background: rgba(99,102,241,0.9);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  padding: 14px 18px;
+  font-weight: 600;
+  transition: 0.2s ease;
+}
 
-                // 🔥 FIX: force video visible + playable
-                video.muted = true;
-                video.playsInline = true;
-                await video.play();
+.btn:hover {
+  transform: translateY(-1px);
+  background: rgba(99,102,241,1);
+}
 
-                const vision = await FilesetResolver.forVisionTasks(
-                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-                );
+/* Smooth fade */
+.fade {
+  transition: all 0.4s ease;
+}
+</style>
 
-                poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-                    baseOptions: {
-                        modelAssetPath:
-                        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
-                        delegate: "GPU"
-                    },
-                    runningMode: "VIDEO",
-                    numPoses: 1
-                });
+<script type="module">
+import {
+  PoseLandmarker,
+  FilesetResolver,
+  DrawingUtils
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
 
-                canvasElement.width = video.videoWidth;
-                canvasElement.height = video.videoHeight;
+/* ---------------- DOM ---------------- */
+const welcome = document.getElementById("welcome");
+const app = document.getElementById("app");
+const initBtn = document.getElementById("init");
 
-                webcamRunning = true;
-                requestAnimationFrame(loop);
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
 
-            } catch (err) {
-                console.error(err);
-                alert(err.message);
-            }
-        }
+const status = document.getElementById("status");
+const repDisplay = document.getElementById("rep");
 
-        function loop() {
-            if (!webcamRunning) return;
+const alarmInput = document.getElementById("alarm");
+const repsInput = document.getElementById("reps");
+const exercise = document.getElementById("exercise");
+const startBtn = document.getElementById("start");
 
-            canvasCtx.save();
-            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+let pose, running=false;
+let repCount=0, target=5;
+let state="UP";
+let alarm=false;
+let armed=false;
 
-            canvasCtx.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+/* ---------------- INIT ---------------- */
+initBtn.onclick = async () => {
+  initBtn.textContent = "Loading...";
 
-            const now = performance.now();
+  const stream = await navigator.mediaDevices.getUserMedia({ video:true });
+  video.srcObject = stream;
 
-            if (video.currentTime !== lastVideoTime && poseLandmarker) {
-                lastVideoTime = video.currentTime;
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+  );
 
-                const results = poseLandmarker.detectForVideo(video, now);
+  pose = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
+    },
+    runningMode: "VIDEO"
+  });
 
-                if (results.landmarks?.length) {
-                    const drawingUtils = new DrawingUtils(canvasCtx);
+  welcome.classList.add("hidden");
+  app.classList.remove("hidden");
 
-                    for (const lm of results.landmarks) {
-                        drawingUtils.drawConnectors(
-                            lm,
-                            PoseLandmarker.POSE_CONNECTIONS,
-                            { color: "#6366F1", lineWidth: 3 }
-                        );
+  video.onloadeddata = () => {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    running = true;
+    loop();
+  };
 
-                        drawingUtils.drawLandmarks(lm, {
-                            color: "#10B981",
-                            radius: 3
-                        });
-                    }
-                }
-            }
+  clock();
+};
 
-            canvasCtx.restore();
-            requestAnimationFrame(loop);
-        }
+/* ---------------- LOOP ---------------- */
+function loop() {
+  if (!running) return;
 
-        window.addEventListener("load", () => {
-            document.getElementById("initialize-system-btn")
-                .addEventListener("click", init);
-        });
-    </script>
+  ctx.drawImage(video, 0, 0);
+  const res = pose.detectForVideo(video, performance.now());
+
+  if (res.landmarks?.length) {
+    const lm = res.landmarks[0];
+    const draw = new DrawingUtils(ctx);
+
+    draw.drawLandmarks(lm);
+
+    handle(lm);
+  }
+
+  requestAnimationFrame(loop);
+}
+
+/* ---------------- ANGLE ---------------- */
+function angle(a,b,c){
+  const r =
+    Math.atan2(c.y-b.y,c.x-b.x) -
+    Math.atan2(a.y-b.y,a.x-b.x);
+  let d = Math.abs(r*180/Math.PI);
+  return d>180?360-d:d;
+}
+
+/* ---------------- LOGIC ---------------- */
+function handle(lm){
+  const shoulder=lm[11], elbow=lm[13], wrist=lm[15];
+  const hip=lm[23], knee=lm[25], ankle=lm[27];
+
+  let msg="";
+
+  if (exercise.value==="squat"){
+    const a = (angle(hip,knee,ankle));
+
+    if (alarm){
+      if (a<100 && state==="UP"){
+        repCount++; state="DOWN";
+      }
+      if (a>160) state="UP";
+      msg=`Squat angle: ${Math.round(a)}`;
+    }
+  }
+
+  if (exercise.value==="pushup"){
+    const a = (angle(shoulder,elbow,wrist));
+
+    if (alarm){
+      if (a<90) state="DOWN";
+      if (a>150 && state==="DOWN"){
+        repCount++; state="UP";
+      }
+      msg=`Pushup angle: ${Math.round(a)}`;
+    }
+  }
+
+  repDisplay.textContent = repCount;
+  status.textContent = msg || "Ready";
+}
+
+/* ---------------- CLOCK ---------------- */
+function clock(){
+  setInterval(()=>{
+    const d=new Date();
+    const t=`${d.getHours()}:${String(d.getMinutes()).padStart(2,"0")}`;
+
+    if (armed && t===alarmInput.value){
+      trigger();
+    }
+  },1000);
+}
+
+/* ---------------- ALARM ---------------- */
+function trigger(){
+  alarm=true;
+  repCount=0;
+  target=parseInt(repsInput.value)||5;
+
+  status.textContent="ALARM ACTIVE — MOVE";
+}
+
+/* ---------------- BUTTON ---------------- */
+startBtn.onclick = () => {
+  armed = !armed;
+  startBtn.textContent = armed ? "ARMED" : "ARM SYSTEM";
+};
+</script>
+
 </head>
 
-<body class="text-white">
+<body class="flex items-center justify-center min-h-screen p-4">
 
-<!-- ONLY FIX IS HERE ↓↓↓ -->
-<div style="position:relative; width:100%; height:70vh;">
-    
-    <!-- FIXED VIDEO (removed hidden class) -->
-    <video 
-        id="webcam"
-        autoplay
-        playsinline
-        muted
-        class="absolute top-0 left-0 w-full h-full object-cover">
-    </video>
+<!-- WELCOME -->
+<div id="welcome" class="glass rounded-2xl p-8 max-w-lg w-full fade">
+  <h1 class="text-2xl font-bold font-mono">PULSE//ALARM</h1>
+  <p class="text-sm text-gray-400 mt-2">
+    Movement-based wake system using AI pose tracking
+  </p>
 
-    <canvas id="output_canvas" class="absolute top-0 left-0 w-full h-full"></canvas>
+  <button id="init" class="btn w-full mt-6">
+    Initialize System
+  </button>
 </div>
 
-<div style="padding:20px;">
-    <button id="initialize-system-btn"
-        style="padding:12px 20px; background:#6366F1; color:white; border-radius:10px;">
-        START CAMERA SYSTEM
+<!-- APP -->
+<div id="app" class="hidden w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+  <div class="glass rounded-2xl p-4">
+    <video id="video" class="hidden" autoplay></video>
+    <canvas id="canvas" class="rounded-xl w-full"></canvas>
+
+    <div class="mt-3 text-sm text-gray-300">
+      <span id="status">Idle</span>
+    </div>
+  </div>
+
+  <div class="glass rounded-2xl p-6 space-y-4">
+
+    <select id="exercise" class="w-full p-3 bg-slate-900 rounded-xl">
+      <option value="squat">Squat</option>
+      <option value="pushup">Pushup</option>
+    </select>
+
+    <input id="alarm" type="time" class="w-full p-3 bg-slate-900 rounded-xl">
+
+    <input id="reps" type="number" value="5"
+      class="w-full p-3 bg-slate-900 rounded-xl">
+
+    <button id="start" class="btn w-full">
+      Arm System
     </button>
+
+    <div class="text-3xl font-bold font-mono">
+      Reps: <span id="rep">0</span>
+    </div>
+
+  </div>
+
 </div>
 
 </body>
