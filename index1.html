@@ -1,20 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PULSE//ALARM — FIXED FULL SYSTEM</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PULSE//ALARM FULL SYSTEM</title>
 
 <script src="https://cdn.tailwindcss.com"></script>
 
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-
 <style>
 body {
-    font-family: 'Plus Jakarta Sans', sans-serif;
+    margin:0;
     background:#02040a;
+    color:white;
+    font-family:system-ui;
 }
-.font-mono { font-family:'Space Grotesk', sans-serif; }
 
 video, canvas {
     position:absolute;
@@ -22,6 +21,17 @@ video, canvas {
     width:100%;
     height:100%;
     object-fit:cover;
+}
+
+.ui {
+    position:absolute;
+    top:10px;
+    left:10px;
+    z-index:10;
+    background:rgba(0,0,0,0.5);
+    padding:10px;
+    border-radius:10px;
+    font-size:14px;
 }
 </style>
 
@@ -32,64 +42,61 @@ import {
     DrawingUtils
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
 
-/* ================= STATE ================= */
+/* ================= CORE STATE ================= */
 let video, canvas, ctx;
 let poseLandmarker;
-let webcamRunning = false;
-let lastVideoTime = -1;
+let drawingUtils;
 
-/* ================= START SYSTEM ================= */
+let running = false;
+let lastTime = 0;
+
+/* ================= METRICS ================= */
+let fps = 0;
+let frameCount = 0;
+let lastFpsTime = performance.now();
+
+/* ================= POSE STATE ================= */
+let squatState = "up";
+let repCount = 0;
+
+/* ================= INIT ================= */
 window.addEventListener("load", () => {
-    video = document.getElementById("webcam");
-    canvas = document.getElementById("output_canvas");
+    video = document.getElementById("cam");
+    canvas = document.getElementById("canvas");
     ctx = canvas.getContext("2d");
 
-    document.getElementById("initialize-system-btn").addEventListener("click", initSystem);
+    document.getElementById("start").onclick = startSystem;
 });
 
-/* ================= INIT SYSTEM ================= */
-async function initSystem() {
-    try {
-        await startCamera();
-        await startMediaPipe();
+/* ================= START ================= */
+async function startSystem() {
+    await setupCamera();
+    await setupPose();
 
-        webcamRunning = true;
-        requestAnimationFrame(loop);
+    drawingUtils = new DrawingUtils(ctx);
 
-        console.log("SYSTEM ONLINE");
-    } catch (err) {
-        console.error("INIT ERROR:", err);
-        alert(err.message);
-    }
+    running = true;
+    requestAnimationFrame(loop);
 }
 
-/* ================= CAMERA FIX (CRITICAL) ================= */
-async function startCamera() {
+/* ================= CAMERA ================= */
+async function setupCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-            facingMode: "user",
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-        },
+        video: { facingMode: "user" },
         audio: false
     });
 
     video.srcObject = stream;
 
-    await new Promise(resolve => {
-        video.onloadedmetadata = resolve;
-    });
-
-    await video.play(); // 🔥 CRITICAL FIX
+    await new Promise(res => video.onloadedmetadata = res);
+    await video.play();
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-
-    console.log("Camera ready:", canvas.width, canvas.height);
 }
 
-/* ================= MEDIAPIPE ================= */
-async function startMediaPipe() {
+/* ================= POSE ================= */
+async function setupPose() {
     const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
     );
@@ -97,71 +104,113 @@ async function startMediaPipe() {
     poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
         baseOptions: {
             modelAssetPath:
-                "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
+            "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
         },
         runningMode: "VIDEO",
         numPoses: 1
     });
-
-    console.log("MediaPipe loaded");
 }
 
-/* ================= MAIN LOOP ================= */
-function loop() {
-    if (!webcamRunning) return;
+/* ================= LOOP ================= */
+function loop(now) {
+    if (!running) return;
+
+    const delta = now - lastTime;
+    lastTime = now;
+
+    updateFPS(now);
 
     ctx.save();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
 
-    // mirror camera
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
+    // mirror
+    ctx.translate(canvas.width,0);
+    ctx.scale(-1,1);
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
-    if (video.currentTime !== lastVideoTime) {
-        lastVideoTime = video.currentTime;
-
-        const results = poseLandmarker.detectForVideo(video, performance.now());
+    if (poseLandmarker && video.readyState >= 2) {
+        const results = poseLandmarker.detectForVideo(video, now);
 
         if (results.landmarks?.length) {
-            const draw = new DrawingUtils(ctx);
-
-            for (const lm of results.landmarks) {
-                draw.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, {
-                    color: "#6366F1",
-                    lineWidth: 3
-                });
-
-                draw.drawLandmarks(lm, {
-                    color: "#10B981",
-                    radius: 3
-                });
-            }
+            processPose(results.landmarks[0]);
+            drawPose(results.landmarks[0]);
         }
     }
 
     ctx.restore();
+    drawUI();
 
     requestAnimationFrame(loop);
+}
+
+/* ================= POSE LOGIC (SQUAT EXAMPLE) ================= */
+function processPose(lm) {
+    const hip = lm[23];
+    const knee = lm[25];
+
+    if (!hip || !knee) return;
+
+    const dy = hip.y - knee.y;
+
+    if (dy < 0.05 && squatState === "up") {
+        squatState = "down";
+    }
+
+    if (dy > 0.2 && squatState === "down") {
+        squatState = "up";
+        repCount++;
+    }
+}
+
+/* ================= DRAW POSE ================= */
+function drawPose(lm) {
+    drawingUtils.drawConnectors(
+        lm,
+        PoseLandmarker.POSE_CONNECTIONS ?? [],
+        { color:"#6366F1", lineWidth:3 }
+    );
+
+    drawingUtils.drawLandmarks(lm, {
+        color:"#10B981",
+        radius:3
+    });
+}
+
+/* ================= FPS ================= */
+function updateFPS(now) {
+    frameCount++;
+    if (now - lastFpsTime >= 1000) {
+        fps = frameCount;
+        frameCount = 0;
+        lastFpsTime = now;
+    }
+}
+
+/* ================= UI ================= */
+function drawUI() {
+    document.getElementById("fps").textContent = fps;
+    document.getElementById("reps").textContent = repCount;
+    document.getElementById("state").textContent = squatState;
 }
 </script>
 
 </head>
 
-<body class="text-white">
+<body>
 
-<!-- CAMERA -->
-<div style="position:relative; width:100%; height:70vh;">
-    <video id="webcam" autoplay playsinline muted></video>
-    <canvas id="output_canvas"></canvas>
+<div class="ui">
+    FPS: <span id="fps">0</span><br/>
+    REPS: <span id="reps">0</span><br/>
+    STATE: <span id="state">idle</span><br/>
 </div>
 
-<!-- BUTTON -->
-<div style="padding:20px;">
-    <button id="initialize-system-btn"
-        style="padding:12px 20px; background:#6366F1; color:white; border-radius:10px;">
-        START CAMERA SYSTEM
+<video id="cam" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+
+<div style="position:absolute;bottom:20px;left:20px;z-index:20;">
+    <button id="start" style="padding:10px 20px;background:#6366F1;border-radius:10px;">
+        START SYSTEM
     </button>
 </div>
 
