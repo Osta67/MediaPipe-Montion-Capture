@@ -1,257 +1,713 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PULSE//ALARM — Neural Wake System</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PULSE//ALARM — Neural Wakeup System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body { 
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: #02040a;
+        }
+        .font-mono { 
+            font-family: 'Space Grotesk', sans-serif; 
+        }
+        
+        /* Premium Scanline HUD effect */
+        .scanline::before {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.3) 50%), linear-gradient(90deg, rgba(99, 102, 241, 0.03), rgba(244, 63, 94, 0.01), rgba(16, 185, 129, 0.03));
+            z-index: 2;
+            background-size: 100% 3px, 4px 100%;
+            pointer-events: none;
+        }
+        
+        @keyframes laser-sweep {
+            0% { top: 0%; }
+            50% { top: 100%; }
+            100% { top: 0%; }
+        }
+        .laser-bar {
+            animation: laser-sweep 3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+        }
 
-<script src="https://cdn.tailwindcss.com"></script>
+        /* Cyberpunk Glitch & Glow Animates */
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 0.15; transform: scale(1); }
+            50% { opacity: 0.25; transform: scale(1.05); }
+        }
+        .ambient-glow {
+            animation: pulse-glow 8s ease-in-out infinite;
+        }
 
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+        .glow-indigo { box-shadow: 0 0 40px -10px rgba(99, 102, 241, 0.4), inset 0 0 20px -5px rgba(99, 102, 241, 0.2); }
+        .glow-rose { box-shadow: 0 0 60px -10px rgba(244, 63, 94, 0.6), inset 0 0 30px -5px rgba(244, 63, 94, 0.3); }
+        
+        /* Custom scrollbar styling for technical logs */
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+        ::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.3); border-radius: 2px; }
+    </style>
 
-<style>
-body {
-  font-family: "Inter", sans-serif;
-  background: radial-gradient(circle at top, #0b1220, #02040a);
-  color: #e5e7eb;
-}
+    <script type="module">
+        import {
+            PoseLandmarker,
+            FilesetResolver,
+            DrawingUtils
+        } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
 
-.font-mono {
-  font-family: "Space Grotesk", sans-serif;
-}
+        // DOM Screens
+        const welcomeScreen = document.getElementById("welcome-screen");
+        const appScreen = document.getElementById("app-screen");
+        const initializeSystemBtn = document.getElementById("initialize-system-btn");
+        const setupLogs = document.getElementById("setup-logs");
 
-/* Subtle glass */
-.glass {
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  backdrop-filter: blur(14px);
-}
+        // App Core DOM Elements
+        const video = document.getElementById("webcam");
+        const canvasElement = document.getElementById("output_canvas");
+        const canvasCtx = canvasElement.getContext("2d");
+        const statusText = document.getElementById("status-text");
+        const statusContainer = document.getElementById("status-container");
+        const startBtn = document.getElementById("start-btn");
+        const alarmTimeInput = document.getElementById("alarm-time-input");
+        const repInput = document.getElementById("rep-input");
+        const exerciseSelect = document.getElementById("exercise-select");
+        const clockDisplay = document.getElementById("clock-display");
+        const progressContainer = document.getElementById("progress-container");
+        const progressFill = document.getElementById("progress-fill");
+        const repCounterDisplay = document.getElementById("rep-counter");
+        const targetRepDisplay = document.getElementById("target-rep-display");
 
-/* Cleaner button */
-.btn {
-  background: rgba(99,102,241,0.9);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 14px;
-  padding: 14px 18px;
-  font-weight: 600;
-  transition: 0.2s ease;
-}
+        // Fullscreen Overlay DOM Elements
+        const videoWrapper = document.getElementById("video-wrapper");
+        const fullscreenHud = document.getElementById("fullscreen-hud");
+        const fsRepCounter = document.getElementById("fs-rep-counter");
+        const fsTargetRep = document.getElementById("fs-target-rep");
+        const fsProgressFill = document.getElementById("fs-progress-fill");
+        const fsStatusText = document.getElementById("fs-status-text");
+        const trackingLaser = document.getElementById("tracking-laser");
 
-.btn:hover {
-  transform: translateY(-1px);
-  background: rgba(99,102,241,1);
-}
+        // App State
+        let poseLandmarker = undefined;
+        let webcamRunning = false;
+        let lastVideoTime = -1;
+        let systemArmed = false;
+        let alarmActive = false;
+        let clockInterval = null;
+        let repCount = 0;
+        let targetReps = 5; 
+        let targetAlarmTime = ""; 
+        let exerciseState = "UP"; 
 
-/* Smooth fade */
-.fade {
-  transition: all 0.4s ease;
-}
-</style>
+        // Audio Context
+        let audioCtx;
+        let beepInterval;
 
-<script type="module">
-import {
-  PoseLandmarker,
-  FilesetResolver,
-  DrawingUtils
-} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
+        // Terminal text log generator for immersive welcoming sequence
+        function addLog(text, type = "info") {
+            const el = document.createElement("div");
+            el.className = `text-[11px] font-mono leading-relaxed truncate ${type === "error" ? "text-rose-400" : type === "success" ? "text-emerald-400" : "text-slate-400"}`;
+            el.innerHTML = `<span class="text-slate-600">[${new Date().toLocaleTimeString()}]</span> ${text}`;
+            setupLogs.appendChild(el);
+            setupLogs.scrollTop = setupLogs.scrollHeight;
+        }
 
-/* ---------------- DOM ---------------- */
-const welcome = document.getElementById("welcome");
-const app = document.getElementById("app");
-const initBtn = document.getElementById("init");
+        // --- GATEWAY INITIALIZATION TRIGGER ---
+        initializeSystemBtn.addEventListener("click", async () => {
+            initializeSystemBtn.disabled = true;
+            initializeSystemBtn.innerText = "ALLOCATING QUANTUM RESOURCES...";
+            initializeSystemBtn.className = "w-full bg-slate-900 border border-indigo-500/30 text-indigo-400/70 font-bold py-4 px-6 rounded-xl font-mono text-xs tracking-widest cursor-not-allowed";
+            
+            setupLogs.classList.remove("hidden");
+            
+            await sleep(600);
+            addLog("Initializing visual telemetry framework layers...");
+            await sleep(400);
+            addLog("Requesting terminal optical capture credentials (Webcam)...");
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                video.srcObject = stream;
+                addLog("Camera node stream captured successfully.", "success");
+                
+                await sleep(500);
+                addLog("Downloading Google MediaPipe spatial tensor graphs (Lite v1.0)...");
+                
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+                );
+                poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+                        delegate: "GPU"
+                    },
+                    runningMode: "VIDEO",
+                    numPoses: 1
+                });
+                
+                addLog("Neural graph mapped. 33 structural bio-coordinates verified.", "success");
+                await sleep(600);
+                addLog("System operational. Launching matrix environment...");
+                await sleep(800);
 
-const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+                // Transition Screens Smoothly
+                welcomeScreen.classList.add("opacity-0", "scale-95");
+                setTimeout(() => {
+                    welcomeScreen.classList.add("hidden");
+                    appScreen.classList.remove("hidden");
+                    // Force small timeout to let display register before opacity transitions
+                    setTimeout(() => appScreen.classList.replace("opacity-0", "opacity-100"), 50);
+                    
+                    // Boot up video processing loops
+                    video.addEventListener("loadeddata", () => {
+                        canvasElement.width = video.videoWidth;
+                        canvasElement.height = video.videoHeight;
+                        webcamRunning = true;
+                        predictWebcam();
+                    });
+                    startLiveClock();
+                }, 500);
 
-const status = document.getElementById("status");
-const repDisplay = document.getElementById("rep");
+            } catch (error) {
+                console.error(error);
+                addLog("CRITICAL FAULT: Initialization cycle aborted.", "error");
+                addLog(`REASON: ${error.message || "Hardware stream link rejection"}`, "error");
+                initializeSystemBtn.disabled = false;
+                initializeSystemBtn.innerText = "RETRY HARDWARE LINK";
+                initializeSystemBtn.className = "w-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white font-bold py-4 px-6 rounded-xl font-mono text-xs tracking-widest hover:opacity-90 transition-all";
+            }
+        });
 
-const alarmInput = document.getElementById("alarm");
-const repsInput = document.getElementById("reps");
-const exercise = document.getElementById("exercise");
-const startBtn = document.getElementById("start");
+        const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-let pose, running=false;
-let repCount=0, target=5;
-let state="UP";
-let alarm=false;
-let armed=false;
+        // --- 2. WEBCAM & RENDERING LOGIC ---
+        async function predictWebcam() {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.translate(canvasElement.width, 0);
+            canvasCtx.scale(-1, 1);
+            canvasCtx.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
 
-/* ---------------- INIT ---------------- */
-initBtn.onclick = async () => {
-  initBtn.textContent = "Loading...";
+            let startTimeMs = performance.now();
+            if (lastVideoTime !== video.currentTime) {
+                lastVideoTime = video.currentTime;
+                const results = poseLandmarker.detectForVideo(video, startTimeMs);
 
-  const stream = await navigator.mediaDevices.getUserMedia({ video:true });
-  video.srcObject = stream;
+                if (results.landmarks && results.landmarks.length > 0) {
+                    const landmarks = results.landmarks[0];
+                    const drawingUtils = new DrawingUtils(canvasCtx);
+                    
+                    // Draw hyper premium high tech glow vector connectors
+                    drawingUtils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
+                        color: alarmActive ? "#f43f5e" : "#6366F1",
+                        lineWidth: alarmActive ? 5 : 2.5
+                    });
+                    drawingUtils.drawLandmarks(landmarks, { 
+                        color: alarmActive ? "#ffffff" : "#10B981", 
+                        lineWidth: 1, 
+                        radius: 2.5 
+                    });
 
-  const vision = await FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-  );
+                    processExerciseAI(landmarks);
+                }
+            }
+            canvasCtx.restore();
 
-  pose = await PoseLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath:
-        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
-    },
-    runningMode: "VIDEO"
-  });
+            if (webcamRunning) {
+                window.requestAnimationFrame(predictWebcam);
+            }
+        }
 
-  welcome.classList.add("hidden");
-  app.classList.remove("hidden");
+        // --- 3. MATH HELPERS ---
+        function calculateAngle(p1, p2, p3) {
+            let radians = Math.atan2(p3.y - p2.y, p3.x - p2.x) - Math.atan2(p1.y - p2.y, p1.x - p2.x);
+            let angle = Math.abs((radians * 180.0) / Math.PI);
+            if (angle > 180.0) angle = 360.0 - angle;
+            return angle;
+        }
 
-  video.onloadeddata = () => {
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    running = true;
-    loop();
-  };
+        // --- 4. ADVANCED REPETITION TRACKING ENGINE ---
+        function processExerciseAI(landmarks) {
+            const currentExercise = exerciseSelect.value;
+            
+            const leftShoulder = landmarks[11];
+            const rightShoulder = landmarks[12];
+            const leftElbow = landmarks[13];
+            const rightElbow = landmarks[14];
+            const leftWrist = landmarks[15];
+            const rightWrist = landmarks[16];
+            const leftHip = landmarks[23];
+            const rightHip = landmarks[24];
+            const leftKnee = landmarks[25];
+            const rightKnee = landmarks[26];
+            const leftAnkle = landmarks[27];
+            const rightAnkle = landmarks[28];
 
-  clock();
-};
+            let activeCueText = "";
 
-/* ---------------- LOOP ---------------- */
-function loop() {
-  if (!running) return;
+            if (currentExercise === "squat") {
+                const leftKneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
+                const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
+                const avgKneeAngle = (leftKneeAngle + rightKneeAngle) / 2;
 
-  ctx.drawImage(video, 0, 0);
-  const res = pose.detectForVideo(video, performance.now());
+                if (alarmActive) {
+                    if (avgKneeAngle < 105) { 
+                        if (exerciseState === "UP") {
+                            repCount++;
+                            exerciseState = "DOWN";
+                            updateProgress();
+                            if (repCount >= targetReps) return stopAlarm();
+                        }
+                        activeCueText = "DEPTH VALIDATED // RISE UP";
+                        updateStatusStyle("success");
+                    } else if (avgKneeAngle > 160) { 
+                        exerciseState = "UP";
+                        activeCueText = "DROP LOWER // SQUAT TO PARALLEL";
+                        updateStatusStyle("active");
+                    }
+                } else {
+                    statusText.innerText = systemArmed ? "SYSTEM LOCKED // TRACKING ENGINE ARMED" : `ANGULAR VECTOR DISTANCE: ${Math.round(avgKneeAngle)}°`;
+                    updateStatusStyle(systemArmed ? "warning" : "idle");
+                }
+            }
 
-  if (res.landmarks?.length) {
-    const lm = res.landmarks[0];
-    const draw = new DrawingUtils(ctx);
+            else if (currentExercise === "pushup") {
+                const leftElbowAngle = calculateAngle(leftShoulder, leftElbow, leftWrist);
+                const rightElbowAngle = calculateAngle(rightShoulder, rightElbow, rightWrist);
+                const avgElbowAngle = (leftElbowAngle + rightElbowAngle) / 2;
 
-    draw.drawLandmarks(lm);
+                if (alarmActive) {
+                    if (avgElbowAngle < 95) { 
+                        exerciseState = "DOWN";
+                        activeCueText = "MAX COMPRESSION RECOVERY // DRIFT UP";
+                        updateStatusStyle("success");
+                    } else if (avgElbowAngle > 155 && exerciseState === "DOWN") { 
+                        repCount++;
+                        exerciseState = "UP";
+                        updateProgress();
+                        if (repCount >= targetReps) return stopAlarm();
+                    } else {
+                        activeCueText = "LOWER CHEST TOWARD SURFACE PERPENDICULAR";
+                        updateStatusStyle("active");
+                    }
+                } else {
+                    statusText.innerText = systemArmed ? "SYSTEM LOCKED // TRACKING ENGINE ARMED" : `FLEXION COEFFICIENT: ${Math.round(avgElbowAngle)}°`;
+                    updateStatusStyle(systemArmed ? "warning" : "idle");
+                }
+            }
 
-    handle(lm);
-  }
+            else if (currentExercise === "jack") {
+                const feetDistance = Math.hypot(leftAnkle.x - rightAnkle.x, leftAnkle.y - rightAnkle.y);
+                const shoulderWidth = Math.hypot(leftShoulder.x - rightShoulder.x, leftShoulder.y - rightShoulder.y);
 
-  requestAnimationFrame(loop);
-}
+                const handsOverHead = (leftWrist.y < leftShoulder.y) && (rightWrist.y < rightShoulder.y);
+                const feetWide = feetDistance > (shoulderWidth * 1.5);
 
-/* ---------------- ANGLE ---------------- */
-function angle(a,b,c){
-  const r =
-    Math.atan2(c.y-b.y,c.x-b.x) -
-    Math.atan2(a.y-b.y,a.x-b.x);
-  let d = Math.abs(r*180/Math.PI);
-  return d>180?360-d:d;
-}
+                if (alarmActive) {
+                    if (handsOverHead && feetWide) {
+                        if (exerciseState === "CLOSED") {
+                            repCount++;
+                            exerciseState = "OPEN";
+                            updateProgress();
+                            if (repCount >= targetReps) return stopAlarm();
+                        }
+                        activeCueText = "EXTENSION ACCEPTED // SNAP CORES IN";
+                        updateStatusStyle("success");
+                    } else if (!handsOverHead && !feetWide) {
+                        exerciseState = "CLOSED";
+                        activeCueText = "JUMP OUTWARD // EXTEND APEX OVERHEAD";
+                        updateStatusStyle("active");
+                    }
+                } else {
+                    statusText.innerText = systemArmed ? "SYSTEM LOCKED // TRACKING ENGINE ARMED" : (handsOverHead && feetWide ? "KINETIC NODE MESH DETECTED" : "ALIGN BODY CENTER AXIS VERTICAL TO FRAME");
+                    updateStatusStyle(systemArmed ? "warning" : "idle");
+                }
+            }
 
-/* ---------------- LOGIC ---------------- */
-function handle(lm){
-  const shoulder=lm[11], elbow=lm[13], wrist=lm[15];
-  const hip=lm[23], knee=lm[25], ankle=lm[27];
+            else if (currentExercise === "crunch") {
+                const canvasW = canvasElement.width;
+                const canvasH = canvasElement.height;
+                const midShoulder = {
+                    x: ((leftShoulder.x + rightShoulder.x) / 2) * canvasW,
+                    y: ((leftShoulder.y + rightShoulder.y) / 2) * canvasH
+                };
+                const midKnee = {
+                    x: ((leftKnee.x + rightKnee.x) / 2) * canvasW,
+                    y: ((leftKnee.y + rightKnee.y) / 2) * canvasH
+                };
+                const distance = Math.hypot(midKnee.x - midShoulder.x, midKnee.y - midShoulder.y);
 
-  let msg="";
+                if (alarmActive) {
+                    if (distance > 220) {
+                        exerciseState = "UP";
+                        activeCueText = "TORSO EXTENDED // INITIATE RECONDUCTION";
+                        updateStatusStyle("active");
+                    } else if (distance < 140 && exerciseState === "UP") {
+                        repCount++;
+                        exerciseState = "DOWN";
+                        updateProgress();
+                        if (repCount >= targetReps) return stopAlarm();
+                    } else if (exerciseState === "DOWN") {
+                        activeCueText = "METRIC VERIFIED // EXTEND BACKWARDS SLOWLY";
+                        updateStatusStyle("success");
+                    }
+                } else {
+                    statusText.innerText = systemArmed ? "SYSTEM LOCKED // TRACKING ENGINE ARMED" : `DELTA PROXIMITY APEX: ${Math.round(distance)}px`;
+                    updateStatusStyle(systemArmed ? "warning" : "idle");
+                }
+            }
 
-  if (exercise.value==="squat"){
-    const a = (angle(hip,knee,ankle));
+            if (alarmActive && activeCueText) {
+                statusText.innerText = activeCueText;
+                fsStatusText.innerText = activeCueText;
+            }
+        }
 
-    if (alarm){
-      if (a<100 && state==="UP"){
-        repCount++; state="DOWN";
-      }
-      if (a>160) state="UP";
-      msg=`Squat angle: ${Math.round(a)}`;
-    }
-  }
+        // --- 5. UI STATE MANAGER ---
+        function updateStatusStyle(state) {
+            statusContainer.className = "p-4 rounded-xl text-center font-mono tracking-wide font-medium border text-xs backdrop-blur-md transition-all duration-300 ";
+            if (state === "idle") {
+                statusContainer.classList.add("bg-slate-900/40", "border-indigo-500/20", "text-indigo-400");
+            } else if (state === "active") {
+                statusContainer.classList.add("bg-indigo-950/30", "border-indigo-500/60", "text-indigo-300", "animate-pulse");
+            } else if (state === "success") {
+                statusContainer.classList.add("bg-emerald-950/40", "border-emerald-500/50", "text-emerald-400");
+            } else if (state === "warning") {
+                statusContainer.classList.add("bg-amber-950/20", "border-amber-500/30", "text-amber-400");
+            } else if (state === "error") {
+                statusContainer.classList.add("bg-rose-950/40", "border-rose-500/50", "text-rose-400");
+            }
+        }
 
-  if (exercise.value==="pushup"){
-    const a = (angle(shoulder,elbow,wrist));
+        // --- 6. REAL TIME CLOCK & ALARM SCHEDULER ENGINE ---
+        function startLiveClock() {
+            const updateClock = () => {
+                const now = new Date();
+                const hours = now.getHours().toString().padStart(2, '0');
+                const minutes = now.getMinutes().toString().padStart(2, '0');
+                const seconds = now.getSeconds().toString().padStart(2, '0');
+                
+                clockDisplay.innerText = `${hours}:${minutes}:${seconds}`;
 
-    if (alarm){
-      if (a<90) state="DOWN";
-      if (a>150 && state==="DOWN"){
-        repCount++; state="UP";
-      }
-      msg=`Pushup angle: ${Math.round(a)}`;
-    }
-  }
+                if (systemArmed && !alarmActive) {
+                    const currentTimeString = `${hours}:${minutes}`;
+                    if (currentTimeString === targetAlarmTime) {
+                        triggerAlarm();
+                    }
+                }
+            };
+            
+            updateClock();
+            clockInterval = setInterval(updateClock, 1000);
+        }
 
-  repDisplay.textContent = repCount;
-  status.textContent = msg || "Ready";
-}
+        // Trigger alarm instantly for demonstration/debugging purposes
+        document.addEventListener("DOMContentLoaded", () => {
+            document.getElementById("test-trigger-btn").addEventListener("click", () => {
+                if (!systemArmed) {
+                    initAudio();
+                    targetReps = parseInt(repInput.value) || 5;
+                    targetRepDisplay.innerText = `/ ${targetReps}`;
+                    fsTargetRep.innerText = `/ ${targetReps}`;
+                    systemArmed = true;
+                }
+                triggerAlarm();
+            });
+        });
 
-/* ---------------- CLOCK ---------------- */
-function clock(){
-  setInterval(()=>{
-    const d=new Date();
-    const t=`${d.getHours()}:${String(d.getMinutes()).padStart(2,"0")}`;
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
 
-    if (armed && t===alarmInput.value){
-      trigger();
-    }
-  },1000);
-}
+        function playBeep() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime); 
+            gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.25);
+        }
 
-/* ---------------- ALARM ---------------- */
-function trigger(){
-  alarm=true;
-  repCount=0;
-  target=parseInt(repsInput.value)||5;
+        startBtn.addEventListener("click", () => {
+            if (alarmActive) return;
 
-  status.textContent="ALARM ACTIVE — MOVE";
-}
+            if (systemArmed) {
+                systemArmed = false;
+                alarmTimeInput.disabled = false;
+                repInput.disabled = false;
+                exerciseSelect.disabled = false;
+                startBtn.innerText = "ARM SYSTEM MOVEMENT LOCK";
+                startBtn.className = "w-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-bold py-4 px-6 rounded-xl transition-all font-mono tracking-widest text-xs uppercase shadow-lg shadow-indigo-500/20 active:scale-[0.98]";
+                statusText.innerText = "Core monitoring engine standing by.";
+                updateStatusStyle("idle");
+                return;
+            }
+            
+            if (!alarmTimeInput.value) {
+                statusText.innerText = "ERROR // SELECT TARGET ALARM HORIZON TIMESTAMP";
+                updateStatusStyle("error");
+                return;
+            }
 
-/* ---------------- BUTTON ---------------- */
-startBtn.onclick = () => {
-  armed = !armed;
-  startBtn.textContent = armed ? "ARMED" : "ARM SYSTEM";
-};
-</script>
+            initAudio(); 
+            targetReps = parseInt(repInput.value) || 5;
+            targetAlarmTime = alarmTimeInput.value; 
+            
+            targetRepDisplay.innerText = `/ ${targetReps}`;
+            fsTargetRep.innerText = `/ ${targetReps}`;
 
+            systemArmed = true;
+            alarmTimeInput.disabled = true;
+            repInput.disabled = true;
+            exerciseSelect.disabled = true;
+            
+            startBtn.innerText = "ABORT CURRENT CHRONO LOCK";
+            startBtn.className = "w-full bg-slate-900 border border-amber-500/40 text-amber-400 font-bold py-4 px-6 rounded-xl transition-all font-mono tracking-widest text-xs uppercase hover:bg-amber-950/20 active:scale-[0.98]";
+            
+            statusText.innerText = "SYSTEM LOCKED // TRACKING ENGINE ARMED";
+            updateStatusStyle("warning");
+        });
+
+        function triggerAlarm() {
+            alarmActive = true;
+            repCount = 0;
+            exerciseState = "RESET";
+            
+            // Go Fullscreen Immersive Overlay Hub
+            videoWrapper.className = "fixed inset-0 z-50 bg-slate-950 w-screen h-screen transition-all duration-700 glow-rose scanline";
+            fullscreenHud.classList.remove("hidden");
+            fullscreenHud.classList.add("flex");
+            trackingLaser.classList.remove("hidden");
+
+            progressContainer.classList.remove("opacity-0");
+            progressContainer.classList.add("opacity-100");
+            updateProgress();
+
+            beepInterval = setInterval(playBeep, 400); 
+        }
+
+        function stopAlarm() {
+            alarmActive = false;
+            systemArmed = false; 
+            clearInterval(beepInterval);
+            
+            // Revert back safely
+            videoWrapper.className = "relative w-full aspect-video bg-slate-950/90 rounded-2xl overflow-hidden border border-slate-800 shadow-2xl ring-1 ring-slate-800/50 transition-all duration-700 glow-indigo scanline";
+            fullscreenHud.classList.add("hidden");
+            fullscreenHud.classList.remove("flex");
+            trackingLaser.classList.add("hidden");
+
+            statusText.innerText = "SEQUENCE ACCEPTED // METRICS ACCOMPLISHED";
+            updateStatusStyle("success");
+            
+            alarmTimeInput.disabled = false;
+            repInput.disabled = false;
+            exerciseSelect.disabled = false;
+            
+            startBtn.innerText = "ARM SYSTEM MOVEMENT LOCK";
+            startBtn.className = "w-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-bold py-4 px-6 rounded-xl transition-all font-mono tracking-widest text-xs uppercase shadow-lg shadow-indigo-500/20 active:scale-[0.98]";
+            
+            setTimeout(() => {
+                progressContainer.classList.remove("opacity-100");
+                progressContainer.classList.add("opacity-0");
+                repCounterDisplay.innerText = "0";
+                statusText.innerText = "Core monitoring engine standing by.";
+                updateStatusStyle("idle");
+            }, 4000);
+        }
+
+        function updateProgress() {
+            const percentage = (repCount / targetReps) * 100;
+            progressFill.style.width = `${percentage}%`;
+            fsProgressFill.style.width = `${percentage}%`;
+            
+            repCounterDisplay.innerText = repCount;
+            fsRepCounter.innerText = repCount;
+        }
+    </script>
 </head>
+<body class="text-slate-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 antialiased relative selection:bg-indigo-500/30 overflow-x-hidden">
+    
+    <div class="absolute top-0 left-1/4 -translate-x-1/2 w-[600px] h-[600px] bg-indigo-500/10 blur-[180px] pointer-events-none rounded-full ambient-glow"></div>
+    <div class="absolute bottom-0 right-1/4 translate-x-1/2 w-[500px] h-[500px] bg-pink-500/5 blur-[160px] pointer-events-none rounded-full ambient-glow" style="animation-delay: -4s;"></div>
 
-<body class="flex items-center justify-center min-h-screen p-4">
+    <div id="welcome-screen" class="max-w-2xl w-full bg-slate-900/20 border border-slate-800/80 rounded-3xl p-6 sm:p-10 backdrop-blur-2xl shadow-2xl transition-all duration-500 transform scale-100 relative overflow-hidden ring-1 ring-white/5">
+        <div class="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent"></div>
+        
+        <div class="text-center mb-8">
+            <div class="inline-flex items-center gap-2 px-3 py-1 bg-indigo-500/10 border border-indigo-500/20 rounded-full mb-4">
+                <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span>
+                <span class="text-[9px] font-mono tracking-[0.2em] text-indigo-300 uppercase font-bold">Bio-Telemetry Platform</span>
+            </div>
+            <h1 class="text-3xl sm:text-4xl font-bold tracking-tight text-white font-mono">PULSE<span class="text-indigo-500">//</span>ALARM</h1>
+            <p class="text-xs text-slate-400 mt-2 max-w-sm mx-auto leading-relaxed">The ultimate defensive checkout ritual designed to shock your circadian engine via compulsory biometric verification loops.</p>
+        </div>
 
-<!-- WELCOME -->
-<div id="welcome" class="glass rounded-2xl p-8 max-w-lg w-full fade">
-  <h1 class="text-2xl font-bold font-mono">PULSE//ALARM</h1>
-  <p class="text-sm text-gray-400 mt-2">
-    Movement-based wake system using AI pose tracking
-  </p>
+        <div class="space-y-4 mb-8">
+            <h3 class="text-[10px] font-mono tracking-widest uppercase text-slate-500 font-bold">OPERATIONAL DIRECTIVES</h3>
+            
+            <div class="grid grid-cols-1 gap-3">
+                <div class="flex gap-4 p-4 bg-slate-950/40 rounded-xl border border-slate-900/60 hover:border-slate-800/80 transition-colors">
+                    <div class="flex-shrink-0 w-8 h-8 rounded-lg bg-indigo-950/60 border border-indigo-500/30 flex items-center justify-center font-mono text-xs text-indigo-400 font-bold shadow-inner">01</div>
+                    <div>
+                        <h4 class="text-xs font-bold text-slate-200 uppercase font-mono tracking-wide">Sync Chrono Locks</h4>
+                        <p class="text-[11px] text-slate-400 mt-0.5 leading-relaxed">Input your target waking timeline profile and define the precise neural movement threshold size (Rep counts) required to silence the system alert nodes.</p>
+                    </div>
+                </div>
 
-  <button id="init" class="btn w-full mt-6">
-    Initialize System
-  </button>
-</div>
+                <div class="flex gap-4 p-4 bg-slate-950/40 rounded-xl border border-slate-900/60 hover:border-slate-800/80 transition-colors">
+                    <div class="flex-shrink-0 w-8 h-8 rounded-lg bg-pink-950/60 border border-pink-500/30 flex items-center justify-center font-mono text-xs text-pink-400 font-bold shadow-inner">02</div>
+                    <div>
+                        <h4 class="text-xs font-bold text-slate-200 uppercase font-mono tracking-wide">Audio-Snooze Trigger Lockdown</h4>
+                        <p class="text-[11px] text-slate-400 mt-0.5 leading-relaxed">When the horizon threshold triggers, an intensive auditory alert fires. The system enters an absolute viewport matrix lockdown mode until metrics are cleared.</p>
+                    </div>
+                </div>
 
-<!-- APP -->
-<div id="app" class="hidden w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="flex gap-4 p-4 bg-slate-950/40 rounded-xl border border-slate-900/60 hover:border-slate-800/80 transition-colors">
+                    <div class="flex-shrink-0 w-8 h-8 rounded-lg bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center font-mono text-xs text-emerald-400 font-bold shadow-inner">03</div>
+                    <div>
+                        <h4 class="text-xs font-bold text-slate-200 uppercase font-mono tracking-wide">AI Computer Vision Cleardown</h4>
+                        <p class="text-[11px] text-slate-400 mt-0.5 leading-relaxed">Perform real-time computer vision deep physical metrics (squats, crunches, pushups). The AI processes full structural joints contextually to terminate alerts.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-  <div class="glass rounded-2xl p-4">
-    <video id="video" class="hidden" autoplay></video>
-    <canvas id="canvas" class="rounded-xl w-full"></canvas>
-
-    <div class="mt-3 text-sm text-gray-300">
-      <span id="status">Idle</span>
+        <div class="space-y-4">
+            <button id="initialize-system-btn" class="w-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-bold py-4 px-6 rounded-xl transition-all font-mono tracking-widest text-xs uppercase shadow-xl shadow-indigo-500/20 active:scale-[0.99]">
+                INITIALIZE CORE APPARATUS
+            </button>
+            
+            <div id="setup-logs" class="hidden h-28 bg-slate-950 border border-slate-900/80 rounded-xl p-3.5 overflow-y-auto space-y-1.5 text-left shadow-inner custom-scrollbar"></div>
+        </div>
     </div>
-  </div>
 
-  <div class="glass rounded-2xl p-6 space-y-4">
+    <div id="app-screen" class="hidden max-w-5xl w-full flex flex-col space-y-6 opacity-0 transition-opacity duration-500">
+        
+        <header class="flex flex-col sm:flex-row items-center justify-between border-b border-slate-800/80 pb-5 gap-4">
+            <div class="text-center sm:text-left">
+                <div class="flex items-center justify-center sm:justify-start gap-3">
+                    <div class="h-2 w-2 rounded-full bg-indigo-400 shadow-[0_0_10px_#818cf8] animate-pulse"></div>
+                    <h1 class="text-sm font-bold tracking-[0.25em] font-mono text-slate-200">PULSE // NEURAL_ALARM</h1>
+                </div>
+                <p class="text-[10px] uppercase tracking-wider text-slate-500 mt-1.5 font-mono">Computer Vision Bio-Metric Sequence Interrupter // v2.4.0</p>
+            </div>
+            <div class="flex text-center sm:text-right font-mono text-[10px] text-slate-500 flex-col uppercase tracking-widest space-y-0.5">
+                <div>Subsystem: <span class="text-indigo-400">MediaPipe Pose Core</span></div>
+                <div>Status: <span class="text-emerald-400">Mesh Linked & Operational</span></div>
+            </div>
+        </header>
 
-    <select id="exercise" class="w-full p-3 bg-slate-900 rounded-xl">
-      <option value="squat">Squat</option>
-      <option value="pushup">Pushup</option>
-    </select>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+            
+            <div class="lg:col-span-2 space-y-4">
+                <div id="video-wrapper" class="relative w-full aspect-video bg-slate-950/90 rounded-2xl overflow-hidden border border-slate-800 shadow-2xl ring-1 ring-slate-800/50 transition-all duration-700 glow-indigo scanline">
+                    
+                    <video id="webcam" class="hidden" autoplay playsinline></video>
+                    
+                    <canvas id="output_canvas" class="absolute inset-0 w-full h-full object-cover z-10 scale-x-[-1]"></canvas>
 
-    <input id="alarm" type="time" class="w-full p-3 bg-slate-900 rounded-xl">
+                    <div id="tracking-laser" class="hidden absolute left-0 right-0 h-0.5 bg-rose-500/60 shadow-[0_0_15px_rgba(244,63,94,0.8)] z-20 laser-bar"></div>
 
-    <input id="reps" type="number" value="5"
-      class="w-full p-3 bg-slate-900 rounded-xl">
+                    <div id="fullscreen-hud" class="hidden absolute inset-0 z-30 p-8 flex-col justify-between items-center bg-slate-950/40 pointer-events-none font-mono">
+                        <div class="w-full flex justify-between items-start">
+                            <div class="bg-rose-950/80 border border-rose-500/40 text-rose-400 px-4 py-2 rounded-xl text-[10px] tracking-widest font-bold animate-pulse">
+                                ! CRITICAL WAKE LOCK ENGAGED
+                            </div>
+                            <div class="text-right text-slate-400 text-xs">
+                                CORE DISCIPLINE METRIC INTERRUPT ACTIVE
+                            </div>
+                        </div>
 
-    <button id="start" class="btn w-full">
-      Arm System
-    </button>
+                        <div class="text-center bg-slate-950/80 px-10 py-6 border border-slate-800/80 backdrop-blur-md rounded-2xl">
+                            <div class="text-[10px] tracking-widest text-slate-500 uppercase font-medium">Telemetry Clear Percentage</div>
+                            <div class="flex items-baseline justify-center gap-2 mt-1">
+                                <span id="fs-rep-counter" class="text-6xl font-bold text-white tracking-tighter">0</span>
+                                <span id="fs-target-rep" class="text-xl text-slate-500">/ 5</span>
+                            </div>
+                        </div>
 
-    <div class="text-3xl font-bold font-mono">
-      Reps: <span id="rep">0</span>
+                        <div class="w-full max-w-xl bg-slate-900/90 border border-slate-800/60 rounded-xl p-4 text-center backdrop-blur-md">
+                            <div id="fs-status-text" class="text-xs font-bold text-rose-400 tracking-wider uppercase animate-pulse">LOWER CORE TO INITIALIZE POSE MESH</div>
+                            <div class="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden mt-3 border border-slate-800/50">
+                                <div id="fs-progress-fill" class="bg-gradient-to-r from-rose-500 to-pink-500 h-full w-0 transition-all duration-300 shadow-[0_0_10px_#f43f5e]"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="progress-container" class="opacity-0 transition-opacity duration-300 p-4 bg-slate-900/30 border border-slate-800 rounded-xl flex items-center justify-between gap-4 font-mono text-xs">
+                    <span class="text-slate-400 tracking-wider">CLEAR PROGRESS:</span>
+                    <div class="flex-1 bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-900">
+                        <div id="progress-fill" class="bg-gradient-to-r from-indigo-500 to-pink-500 h-full w-0 transition-all duration-300"></div>
+                    </div>
+                </div>
+
+                <div id="status-container" class="p-4 rounded-xl text-center font-mono tracking-wide font-medium border text-xs backdrop-blur-md transition-all duration-300 bg-slate-900/40 border-indigo-500/20 text-indigo-400">
+                    <span id="status-text">Core monitoring engine standing by.</span>
+                </div>
+            </div>
+
+            <div class="space-y-4">
+                
+                <div class="bg-slate-900/20 border border-slate-800/80 rounded-2xl p-5 text-center backdrop-blur-xl font-mono">
+                    <div class="text-[10px] tracking-widest text-slate-500 uppercase font-medium">SATELLITE MATRIX CHRONO</div>
+                    <div id="clock-display" class="text-3xl font-bold text-white tracking-tight mt-1 bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">00:00:00</div>
+                </div>
+
+                <div class="bg-slate-900/20 border border-slate-800/80 rounded-2xl p-5 space-y-4 backdrop-blur-xl">
+                    <h3 class="text-[10px] font-mono tracking-widest uppercase text-slate-400 font-bold border-b border-slate-800 pb-2">CHRONO BOUND PARAMETERS</h3>
+                    
+                    <div class="space-y-1.5">
+                        <label class="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">Alarm Timeline Node</label>
+                        <input id="alarm-time-input" type="time" class="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 font-mono text-xs text-white focus:outline-none focus:border-indigo-500/50 transition-all custom-time-picker">
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">Biometric Biomechanical Vector</label>
+                        <select id="exercise-select" class="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 font-mono text-xs text-slate-200 focus:outline-none focus:border-indigo-500/50 transition-all appearance-none cursor-pointer">
+                            <option value="squat">ANATOMICAL DEEP SQUAT (KNEE APEX FLEXION)</option>
+                            <option value="pushup">ISOMETRIC HORIZONTAL PUSHUP (ELBOW DEVIATION)</option>
+                            <option value="jack">KINETIC JUMPING JACK (SPATIAL EXTENSION)</option>
+                            <option value="crunch">ABDOMINAL CRUNCH CORE PROXIMITY MESH</option>
+                        </select>
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <div class="flex justify-between items-center">
+                            <label class="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">Target Movement Threshold Size</label>
+                            <span id="rep-counter" class="text-xs font-mono text-indigo-400 font-bold">0 <span id="target-rep-display" class="text-slate-600 font-normal">/ 5</span></span>
+                        </div>
+                        <input id="rep-input" type="number" min="1" max="50" value="5" class="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 font-mono text-xs text-white focus:outline-none focus:border-indigo-500/50 transition-all">
+                    </div>
+
+                    <div class="pt-2 space-y-2">
+                        <button id="start-btn" class="w-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-bold py-4 px-6 rounded-xl transition-all font-mono tracking-widest text-xs uppercase shadow-lg shadow-indigo-500/20 active:scale-[0.98]">
+                            ARM SYSTEM MOVEMENT LOCK
+                        </button>
+
+                        <button id="test-trigger-btn" class="w-full bg-slate-950 border border-rose-500/20 text-rose-400/80 hover:bg-rose-950/20 hover:text-rose-400 py-2.5 px-4 rounded-xl transition-all font-mono tracking-wider text-[10px] uppercase font-medium">
+                            ⚡ INSTANT TEST FIRE (OVERRIDE LOCKS)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-
-  </div>
-
-</div>
-
 </body>
 </html>
